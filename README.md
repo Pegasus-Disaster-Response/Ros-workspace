@@ -275,7 +275,7 @@ ros2 topic list
 # Check frequency
 ros2 topic hz /zed_x/zed_node/left/image_rect_color  # Should be ~30 Hz
 ros2 topic hz /velodyne_points                        # Should be ~10 Hz
-ros2 topic hz /mavros/imu/data                        # Should be ~100 Hz
+ros2 topic hz /xrce/imu/data                        # Should be ~100 Hz
 ```
 
 ---
@@ -350,7 +350,7 @@ Team Pegasus members:
 - [RTAB-Map Wiki](https://github.com/introlab/rtabmap/wiki)
 - [RTAB-Map ROS Wiki](http://wiki.ros.org/rtabmap_ros)
 - [PX4 User Guide](https://docs.px4.io/)
-- [MAVROS Documentation](https://docs.px4.io/main/en/ros/mavros_installation.html)
+- [XRCE-DDS Documentation](https://docs.px4.io/main/en/middleware/uxrce_dds)
 - [ZED X Documentation](https://www.stereolabs.com/docs/)
 
 ---
