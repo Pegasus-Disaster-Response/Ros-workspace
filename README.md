@@ -1,4 +1,4 @@
-# 🚁 Pegasus Disaster Response UAV - Autonomy System
+# Pegasus Disaster Response UAV - Autonomy System
 
 **Team Pegasus | Cal Poly Pomona | Sponsored by Lockheed Martin**
 
@@ -6,7 +6,7 @@ Complete autonomy stack for disaster response eVTOL UAV with RTAB-Map SLAM integ
 
 ---
 
-## 📋 **System Overview**
+## **System Overview**
 
 ### **Hardware**
 - **Flight Controller:** Pixhawk Cube Orange (PX4 firmware)
@@ -23,7 +23,7 @@ Complete autonomy stack for disaster response eVTOL UAV with RTAB-Map SLAM integ
 
 ---
 
-## 🗂️ **Package Structure**
+## **Package Structure**
 
 ```
 pegasus_autonomy/
@@ -50,7 +50,7 @@ pegasus_autonomy/
 
 ---
 
-## 🔧 **Installation**
+## **Installation**
 
 ### **Prerequisites**
 
@@ -81,7 +81,7 @@ source install/setup.bash
 
 ---
 
-## 🚀 **Quick Start**
+## **Quick Start**
 
 ### **1. Hardware Setup**
 
@@ -161,7 +161,7 @@ ros2 launch pegasus_autonomy pegasus_full.launch.py \
 
 ---
 
-## 📊 **ROS Topics**
+## **ROS Topics**
 
 ### **RTAB-Map Outputs**
 ```
@@ -191,7 +191,7 @@ ros2 launch pegasus_autonomy pegasus_full.launch.py \
 
 ---
 
-## 🎛️ **Configuration**
+## **Configuration**
 
 ### **Key RTAB-Map Parameters**
 
@@ -237,7 +237,7 @@ Located in `pegasus_slam.launch.py`:
 
 ---
 
-## 🔍 **Monitoring & Debugging**
+## **Monitoring & Debugging**
 
 ### **Check SLAM Health**
 ```bash
@@ -280,7 +280,7 @@ ros2 topic hz /mavros/imu/data                        # Should be ~100 Hz
 
 ---
 
-## 🗺️ **Map Management**
+## **Map Management**
 
 ### **Save Map**
 Maps are automatically saved to:
@@ -306,21 +306,21 @@ rtabmap-database database.db
 
 ---
 
-## 📝 **Migration from Old System**
+## **Migration from Old System**
 
 ### **What Changed**
 
-**✅ KEPT:**
+** KEPT:**
 - `front_stereo_node.py` - Can still be used for custom vision
 - `px4_state_subscriber_node.py` - PX4 monitoring
 - `vtol1_gazebo_bridge_launch.py` - Simulation bridge
 
-**❌ REMOVED (replaced by RTAB-Map):**
+** REMOVED (replaced by RTAB-Map):**
 - `bottom_stereo_node.py` - Depth processing now in RTAB-Map
 - `lidar_node.py` - LiDAR processing now in RTAB-Map
 - `side_camera_logger_node.py` - Not needed for core SLAM
 
-**✨ UPDATED:**
+** UPDATED:**
 - `mission_planner_node.py` - Now uses RTAB-Map outputs
 - All launch files - New sensor and SLAM integration
 
@@ -335,7 +335,7 @@ Old → New:
 
 ---
 
-## 🤝 **Contributing**
+##  **Contributing**
 
 Team Pegasus members:
 1. Always test in simulation before hardware
@@ -345,7 +345,7 @@ Team Pegasus members:
 
 ---
 
-## 📚 **Resources**
+##  **Resources**
 
 - [RTAB-Map Wiki](https://github.com/introlab/rtabmap/wiki)
 - [RTAB-Map ROS Wiki](http://wiki.ros.org/rtabmap_ros)
@@ -355,7 +355,7 @@ Team Pegasus members:
 
 ---
 
-## 📧 **Contact**
+##  **Contact**
 
 Team Pegasus - Cal Poly Pomona  
 Lockheed Martin Sponsored Project  
@@ -363,5 +363,5 @@ Disaster Response UAV Development
 
 ---
 
-**Last Updated:** 2025  
+**Last Updated:** 2026  
 **Version:** 1.0.0 (RTAB-Map Integration)
