@@ -94,7 +94,7 @@ Edit `launch/pegasus_sensors.launch.py`:
 
 ---
 
-## 🎛️ **Configuration Parameters**
+##  **Configuration Parameters**
 
 ### **Critical RTAB-Map Parameters** (in `pegasus_slam.launch.py`)
 
