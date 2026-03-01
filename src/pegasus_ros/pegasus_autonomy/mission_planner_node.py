@@ -4,7 +4,7 @@ Pegasus Mission Planner Node - Disaster Response Autonomy
 Uses RTAB-Map SLAM outputs and PX4 via XRCE-DDS
 
 Author: Team Pegasus
-Date: 2025
+Date: 2026
 """
 
 import rclpy
@@ -21,10 +21,11 @@ from visualization_msgs.msg import MarkerArray
 # PX4 messages (via XRCE-DDS)
 from px4_msgs.msg import (
     VehicleOdometry,
-    SensorCombined,
     BatteryStatus,
     VehicleStatus
 )
+
+from sensor_msgs.msg import Imu
 
 
 class MissionPlannerNode(Node):
@@ -88,10 +89,10 @@ class MissionPlannerNode(Node):
         )
         
         self.sensor_sub = self.create_subscription(
-            SensorCombined,
-            '/fmu/out/sensor_combined',
+            Imu,
+            '/pegasus/imu/data',
             self.sensor_callback,
-            px4_qos
+            10  # Standard QoS — this is already a ROS Imu message
         )
         
         self.battery_sub = self.create_subscription(
@@ -166,8 +167,8 @@ class MissionPlannerNode(Node):
             self.px4_connected = True
             self.get_logger().info('✓ PX4 connected via XRCE-DDS')
     
-    def sensor_callback(self, msg: SensorCombined):
-        """Raw IMU data"""
+    def sensor_callback(self, msg: Imu):
+        """Bridged IMU data (standard sensor_msgs/Imu from px4_imu_bridge)"""
         pass
     
     def battery_callback(self, msg: BatteryStatus):

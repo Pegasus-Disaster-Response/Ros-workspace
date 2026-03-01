@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>pegasus_ros</name>
-  <version>1.0.0</version>
+  <version>2.0.0</version>
   <description>Pegasus Disaster Response UAV Autonomy Package</description>
   <maintainer email="changwe@calpoly.edu">Team Pegasus - Cal Poly Pomona</maintainer>
   <license>MIT</license>
@@ -11,42 +11,37 @@
 
   <!-- Core ROS dependencies -->
   <depend>rclpy</depend>
-  <depend>rclcpp</depend>
-  
+
   <!-- Message types -->
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>nav_msgs</depend>
   <depend>visualization_msgs</depend>
-  
-  <!-- RTAB-Map SLAM -->
+
+  <!-- RTAB-Map SLAM (built from source — see README) -->
   <exec_depend>rtabmap_slam</exec_depend>
   <exec_depend>rtabmap_odom</exec_depend>
   <exec_depend>rtabmap_util</exec_depend>
   <exec_depend>rtabmap_viz</exec_depend>
-  <exec_depend>rtabmap_launch</exec_depend>
   <exec_depend>rtabmap_msgs</exec_depend>
-  
+
   <!-- Sensor drivers -->
   <exec_depend>zed_wrapper</exec_depend>
   <exec_depend>velodyne_driver</exec_depend>
   <exec_depend>velodyne_pointcloud</exec_depend>
-  
-  <!-- Pixhawk/PX4 connection via XRCE-DDS -->
-  <exec_depend>micro_ros_agent</exec_depend>
+
+  <!-- PX4 messages (via XRCE-DDS) -->
   <exec_depend>px4_msgs</exec_depend>
-  
-  <!-- Visualization -->
-  <exec_depend>rviz2</exec_depend>
-  <exec_depend>rviz_common</exec_depend>
-  <exec_depend>rviz_default_plugins</exec_depend>
-  
+
   <!-- TF & transforms -->
   <exec_depend>tf2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
+
+  <!-- Visualization -->
+  <exec_depend>rviz2</exec_depend>
 
   <!-- Testing -->
   <test_depend>ament_copyright</test_depend>
