@@ -1,0 +1,26 @@
+# ============================================================
+#  Velodyne VLP-16 LiDAR Config — Pegasus Disaster Response UAV
+#  Interface: Ethernet (192.168.1.201)
+# ============================================================
+
+# ── Driver Node ──────────────────────────────────────────────
+velodyne_driver:
+  ros__parameters:
+    device_ip: "192.168.1.201"        # ← UPDATE to match your VLP-16 IP
+    port: 2368
+    model: "VLP16"
+    rpm: 600.0                        # 10 Hz rotation rate
+    frame_id: "velodyne"
+    timestamp_first_packet: false
+
+# ── Point Cloud Conversion Node ──────────────────────────────
+velodyne_convert:
+  ros__parameters:
+    calibration: "/opt/ros/humble/share/velodyne_pointcloud/params/VLP16db.yaml"
+    min_range: 0.4
+    max_range: 100.0
+    view_direction: 0.0
+    organize_cloud: false
+    target_frame: ""
+    fixed_frame: ""
+    model: "VLP16"

@@ -35,6 +35,7 @@ setup(
             'mission_planner_node = pegasus_autonomy.mission_planner_node:main',
             'front_stereo_node = pegasus_autonomy.front_stereo_node:main',
             'px4_state_subscriber_node = pegasus_autonomy.px4_state_subscriber_node:main',
+            'px4_imu_bridge_node = pegasus_autonomy.px4_imu_bridge_node:main',
         ],
     },
     # Force scripts to install in the correct location

@@ -1,267 +1,393 @@
-# Pegasus Disaster Response UAV - Autonomous Navigation System
+# Pegasus Disaster Response UAV — Autonomous Navigation System
 
-**Version:** 1.0.0  
-**Institution:** California Polytechnic State University, Pomona  
-**Team:** Pegasus  
-**Sponsor:** Lockheed Martin  
-**Project Type:** eVTOL UAV for Disaster Response Applications
+**Version:** 2.0.0
+**Institution:** California Polytechnic State University, Pomona
+**Team:** Pegasus
+**Sponsor:** Lockheed Martin
+**ROS 2 Humble | RTAB-Map (from source) | PX4 via XRCE-DDS**
 
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [System Architecture](#system-architecture)
-- [Hardware Requirements](#hardware-requirements)
-- [Software Dependencies](#software-dependencies)
-- [Installation](#installation)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [ROS Topics Reference](#ros-topics-reference)
-- [Package Structure](#package-structure)
-- [Development Guide](#development-guide)
-- [Troubleshooting](#troubleshooting)
-- [Contributing](#contributing)
-- [License](#license)
+**Sensors:** ZED X (single, front-facing) · Velodyne VLP-16 · Pixhawk Cube Orange (IMU)
+**SLAM:** RTAB-Map (LiDAR ICP odometry + RGB-D loop closure + IMU fusion)
 
 ---
 
-## Overview
+## Workspace Structure
 
-The Pegasus autonomous navigation system provides complete SLAM-based localization and mission planning capabilities for disaster response operations. The system integrates multi-sensor fusion using stereo vision, LiDAR, and IMU data to enable autonomous navigation in GPS-denied environments.
-
-### Current Capabilities
-
-- Real-time SLAM and 3D mapping using RTAB-Map
-- Multi-sensor fusion (ZED X stereo camera, Velodyne VLP-16 LiDAR, Pixhawk IMU)
-- Low-latency communication with PX4 flight controller via XRCE-DDS
-- Mission planning framework for disaster response scenarios
-- 2D occupancy grid generation for path planning
-- Modular architecture supporting independent component testing
-
-### Planned Features
-
-- Global path planning using A* and RRT algorithms
-- Real-time obstacle avoidance
-- Computer vision-based survivor detection
-- Fire and smoke detection algorithms
-- Autonomous search pattern execution
-
----
-
-## System Architecture
-
-### Component Overview
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Pegasus ROS System                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────┐   │
-│  │   Sensors    │  │     SLAM     │  │ Mission Planner │   │
-│  │              │  │              │  │                 │   │
-│  │ - ZED X      │→→│  RTAB-Map    │→→│  High-level     │   │
-│  │ - VLP-16     │  │              │  │  Decision       │   │
-│  │ - Pixhawk    │  │  - Visual    │  │  Making         │   │
-│  │   (XRCE-DDS) │  │    Odometry  │  │                 │   │
-│  │              │  │  - Mapping   │  │                 │   │
-│  └──────────────┘  └──────────────┘  └─────────────────┘   │
-│                                                              │
-└─────────────────────────────────────────────────────────────┘
+Ros-workspace/
+├── setup_workspace.sh              ← run this first
+├── COMPLETE_SUMMARY.md             ← quick reference & roadmap
+└── src/
+    ├── pegasus_ros/                ← custom package (configs + launches + nodes)
+    │   ├── config/
+    │   │   ├── rtabmap.yaml        ← RTAB-Map SLAM tuning parameters
+    │   │   ├── vlp16.yaml          ← Velodyne point cloud conversion settings
+    │   │   ├── zed_x.yaml          ← ZED X camera configuration
+    │   │   └── rviz_slam.rviz      ← RViz display configuration
+    │   ├── launch/
+    │   │   ├── pegasus_full.launch.py      ← complete system
+    │   │   ├── pegasus_sensors.launch.py   ← sensor drivers + XRCE-DDS + IMU bridge
+    │   │   ├── pegasus_slam.launch.py      ← RTAB-Map SLAM + static TFs
+    │   │   └── vtol1_gazebo_bridge_launch.py  ← simulation bridge
+    │   └── pegasus_autonomy/
+    │       ├── mission_planner_node.py     ← high-level mission logic
+    │       ├── px4_imu_bridge_node.py      ← PX4 SensorCombined → sensor_msgs/Imu
+    │       ├── front_stereo_node.py        ← front camera processing
+    │       └── px4_state_subscriber_node.py ← PX4 state monitoring
+    ├── rtabmap/                    ← cloned from source (0.23.x — apt 0.22.1 is too old)
+    ├── rtabmap_ros/                ← cloned from source (0.23.x)
+    └── zed-ros2-wrapper/           ← cloned from Stereolabs
 ```
 
-### Data Flow
-
-1. **Sensor Layer**: Raw data acquisition from ZED X camera, VLP-16 LiDAR, and Pixhawk IMU
-2. **Processing Layer**: RTAB-Map performs visual odometry, loop closure detection, and map building
-3. **Decision Layer**: Mission planner processes map data and sensor inputs for autonomous navigation
-
 ---
 
-## Hardware Requirements
+## Quick Start
 
-### Flight Controller
-- **Model**: Pixhawk Cube Orange
-- **Firmware**: PX4 (latest stable)
-- **Interface**: UART (TELEM2) or USB
-- **Baudrate**: 921600
+### 1. Run setup script (once)
 
-### Sensors
-
-#### ZED X Stereo Camera
-- **Interface**: GMSL2 (requires capture card)
-- **Resolution**: 1920x1080 @ 30 FPS
-- **Features**: Neural depth engine, built-in IMU (not used)
-
-#### Velodyne VLP-16 LiDAR
-- **Interface**: Ethernet
-- **Default IP**: 192.168.1.201
-- **Range**: 100 meters
-- **Rotation Rate**: 5-20 Hz (configured to 10 Hz)
-
-### Compute Platform
-- **Recommended**: NVIDIA Jetson Orin AGX
-- **Minimum**: Jetson Xavier NX
-- **OS**: Ubuntu 22.04 (Jammy Jellyfish)
-- **ROS Version**: ROS 2 Humble Hawksbill
-
----
-
-## Software Dependencies
-
-### Core Dependencies
 ```bash
-# ROS 2 Humble
-ros-humble-desktop
-
-# RTAB-Map SLAM
-ros-humble-rtabmap-ros
-
-# Sensor Drivers
-zed-ros2-wrapper (from Stereolabs)
-ros-humble-velodyne
-
-# PX4 Communication
-micro-xrce-dds-agent
-px4_msgs
+chmod +x setup_workspace.sh
+./setup_workspace.sh
+source ~/.bashrc
 ```
 
-### Build Tools
+This script installs all dependencies, removes incompatible apt packages, builds RTAB-Map from source, and configures the workspace.
+
+### 2. Configure your hardware
+
+Set your ZED X serial number:
 ```bash
-python3-colcon-common-extensions
-python3-rosdep
+nano src/pegasus_ros/config/zed_x.yaml
+# Change serial_number: 0 to your actual serial
+# Find it with: /usr/local/zed/tools/ZED_Explorer
+```
+
+Update sensor mount positions in `launch/pegasus_slam.launch.py`:
+```python
+# Find the static TF publishers and update x, y, z to match
+# your actual sensor positions measured from base_link
+tf_base_to_velodyne = ...  # '0.3', '0.0', '0.15'  ← UPDATE THESE
+tf_base_to_zed_x    = ...  # '0.2', '0.0', '0.1'   ← UPDATE THESE
+tf_base_to_imu      = ...  # '0.0', '0.0', '0.0'   ← UPDATE THESE
+```
+
+### 3. Hardware checklist before launch
+
+| Sensor | Check |
+|---|---|
+| VLP-16 | Set Jetson static IP to `192.168.1.100/24`; verify with `ping 192.168.1.201` |
+| ZED X | Serial number set in `zed_x.yaml`; check with `/usr/local/zed/tools/ZED_Explorer` |
+| Pixhawk | Connected via UART (`/dev/ttyTHS1`) or USB (`/dev/ttyACM0`); permissions set |
+| GMSL daemon | `sudo systemctl status nvargus-daemon` — must be **active (running)** |
+
+### 4. Build
+
+```bash
+cd ~/Ros-workspace
+colcon build --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release \
+  --packages-skip zed_debug
+source install/setup.bash
+```
+
+### 5. Launch SLAM
+
+```bash
+ros2 launch pegasus_ros pegasus_full.launch.py
 ```
 
 ---
 
-## Installation
+## RTAB-Map Version — CRITICAL
+
+The apt version of RTAB-Map (`0.22.1`) is **incompatible** with the database format written by newer source builds (`0.23.x`). This workspace builds both `rtabmap` core and `rtabmap_ros` from source.
+
+**If you see this error:**
+```
+Opened database version (0.23.4) is more recent than rtabmap installed version (0.22.1)
+```
+
+**Fix:** The apt version is still installed. Remove it and rebuild:
+```bash
+sudo apt remove -y ros-humble-rtabmap ros-humble-rtabmap-ros
+rm ~/.ros/rtabmap.db
+cd ~/Ros-workspace && colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release --packages-skip zed_debug
+source install/setup.bash
+```
+
+**Verify correct version:**
+```bash
+ros2 run rtabmap_slam rtabmap --version 2>&1 | grep "RTAB-Map:"
+# Expected: RTAB-Map: 0.23.x (NOT 0.22.1)
+```
+
+---
+
+## Architecture Changes (v2.0)
+
+### Odometry: LiDAR ICP (was Stereo Visual)
+
+v1.0 used stereo visual odometry from the ZED X camera. v2.0 uses **LiDAR ICP odometry** from the VLP-16 as the primary odometry source. This is more robust in visually degraded disaster environments (smoke, dust, uniform textures).
+
+```
+VLP-16 → /velodyne_points → icp_odometry → /odom
+                                              ↓
+ZED X → rgb + depth ────────→ RTAB-Map SLAM (loop closure + mapping)
+                                              ↑
+Pixhawk → SensorCombined → px4_imu_bridge → /pegasus/imu/data
+```
+
+### RGB-D Mode (was Stereo Mode)
+
+v1.0 subscribed to stereo image pairs and let RTAB-Map compute disparity. v2.0 uses the ZED X's **NEURAL depth engine** directly, which produces significantly higher quality depth maps.
+
+### IMU Bridge
+
+PX4's `SensorCombined` message is not a standard `sensor_msgs/Imu`. The new `px4_imu_bridge_node` converts PX4 IMU data (FRD frame) to standard ROS IMU messages (FLU frame) for RTAB-Map consumption.
+
+### Static TF Tree
+
+All sensor transforms are now explicitly published:
+```
+map
+ └── odom (published by rtabmap)
+      └── base_link
+           ├── velodyne             [0.3, 0.0, 0.15]   ← UPDATE to your mount
+           ├── zed_x_camera_center  [0.2, 0.0, 0.1]    ← UPDATE to your mount
+           └── imu_link             [0.0, 0.0, 0.0]     ← UPDATE to your mount
+```
+
+---
+
+## Installation (Manual)
+
+If you prefer to set up manually instead of using `setup_workspace.sh`:
 
 ### Prerequisites
 
-Ensure ROS 2 Humble is installed and sourced:
 ```bash
+# ROS 2 Humble must be installed and sourced
 source /opt/ros/humble/setup.bash
+
+# ZED SDK must be installed
+# Download from: https://www.stereolabs.com/developers/release
 ```
 
-### Step 1: Install System Dependencies
+### Step 1: Remove apt RTAB-Map
+
+**This is required.** The apt version (0.22.1) conflicts with source builds.
+
 ```bash
-sudo apt update
-sudo apt install -y \
-    ros-humble-rtabmap-ros \
-    ros-humble-velodyne \
-    python3-colcon-common-extensions \
-    git
+# Check what's installed
+dpkg -l | grep rtabmap
+
+# Remove all apt RTAB-Map packages
+sudo apt remove -y \
+  ros-humble-rtabmap \
+  ros-humble-rtabmap-ros \
+  ros-humble-rtabmap-slam \
+  ros-humble-rtabmap-odom \
+  ros-humble-rtabmap-util \
+  ros-humble-rtabmap-viz \
+  ros-humble-rtabmap-msgs \
+  ros-humble-rtabmap-launch
+
+sudo apt autoremove -y
+
+# Verify removal
+dpkg -l | grep rtabmap
+# Should return nothing
 ```
 
-### Step 2: Install micro-XRCE-DDS Agent
+### Step 2: Remove other unnecessary packages
+
+If you previously installed packages that are no longer needed:
+
+```bash
+# micro_ros_agent — replaced by micro-xrce-dds-agent (snap)
+sudo apt remove -y ros-humble-micro-ros-agent 2>/dev/null || true
+
+# rviz extras not needed
+sudo apt remove -y ros-humble-rviz-common ros-humble-rviz-default-plugins 2>/dev/null || true
+
+# rclcpp not needed (this is a Python package)
+# Note: rclcpp may be pulled in by other packages, only remove if you don't need it
+```
+
+### Step 3: Install system dependencies
+
+```bash
+sudo apt update && sudo apt install -y \
+  ros-humble-velodyne \
+  ros-humble-velodyne-driver \
+  ros-humble-velodyne-pointcloud \
+  ros-humble-tf2-ros \
+  ros-humble-tf2-tools \
+  ros-humble-pcl-ros \
+  ros-humble-pcl-conversions \
+  ros-humble-rviz2 \
+  python3-colcon-common-extensions \
+  python3-rosdep \
+  git
+```
+
+### Step 4: Install XRCE-DDS Agent
+
 ```bash
 sudo snap install micro-xrce-dds-agent --edge
 ```
 
-### Step 3: Create and Build px4_msgs Workspace
+### Step 5: Build PX4 Messages workspace
 
-To optimize build times, px4_msgs is maintained in a separate workspace:
 ```bash
-# Create workspace
 mkdir -p ~/px4_ws/src
 cd ~/px4_ws/src
-
-# Clone px4_msgs
 git clone https://github.com/PX4/px4_msgs.git
-
-# Build
 cd ~/px4_ws
 colcon build --symlink-install
-
-# Source
 echo "source ~/px4_ws/install/setup.bash" >> ~/.bashrc
 source ~/px4_ws/install/setup.bash
 ```
 
-### Step 4: Clone and Build Pegasus Workspace
+### Step 6: Clone source packages
+
 ```bash
-# Clone repository
-cd ~
-git clone https://github.com/Pegasus-Disaster-Response/Ros-workspace.git
-cd Ros-workspace
+cd ~/Ros-workspace/src
 
-# Build
-colcon build --symlink-install --packages-select pegasus_ros
+# RTAB-Map core (from source for 0.23.x)
+git clone https://github.com/introlab/rtabmap.git
 
-# Create symlink for executables
-cd install/pegasus_ros/lib
-ln -s pegasus_autonomy pegasus_ros
+# RTAB-Map ROS 2 wrapper (from source)
+git clone --branch ros2 https://github.com/introlab/rtabmap_ros.git
 
-# Source workspace
-echo "source ~/Ros-workspace/install/setup.bash" >> ~/.bashrc
-source ~/Ros-workspace/install/setup.bash
+# ZED ROS 2 wrapper
+git clone --recurse-submodules https://github.com/stereolabs/zed-ros2-wrapper.git
 ```
 
-### Step 5: Verify Installation
+### Step 7: Build
+
 ```bash
-# Check package is available
-ros2 pkg list | grep pegasus_ros
+cd ~/Ros-workspace
+source /opt/ros/humble/setup.bash
+source ~/px4_ws/install/setup.bash
 
-# Check executables
-ros2 pkg executables pegasus_ros
+rosdep install --from-paths src --ignore-src -r -y
 
-# Expected output:
-# pegasus_ros front_stereo_node
-# pegasus_ros mission_planner_node
-# pegasus_ros px4_state_subscriber_node
+colcon build --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release \
+  --packages-skip zed_debug
+
+source install/setup.bash
+echo "source ~/Ros-workspace/install/setup.bash" >> ~/.bashrc
 ```
 
 ---
 
-## Configuration
+## Package Verification
 
-### Pixhawk Serial Connection
+Run these checks to confirm everything is installed correctly.
 
-Edit `launch/pegasus_sensors.launch.py` (line 37):
-```python
-fcu_dev_arg = DeclareLaunchArgument(
-    'fcu_dev',
-    default_value='/dev/ttyTHS1',  # Modify this
-    description='Serial device for Pixhawk'
-)
-```
-
-**Common configurations:**
-- `/dev/ttyTHS1` - Jetson UART 1 (TELEM2)
-- `/dev/ttyACM0` - USB connection
-- `/dev/ttyUSB0` - Telemetry radio
-
-**Set permissions:**
+### ROS 2 Environment
 ```bash
-sudo usermod -a -G dialout $USER
-# Logout and login for changes to take effect
+echo $ROS_DISTRO
+# Expected: humble
 ```
 
-### VLP-16 Network Configuration
+### RTAB-Map (from source)
+```bash
+ros2 pkg list | grep rtabmap
+# Expected:
+#   rtabmap_msgs
+#   rtabmap_odom
+#   rtabmap_ros
+#   rtabmap_slam
+#   rtabmap_util
+#   rtabmap_viz
 
-Edit `launch/pegasus_sensors.launch.py` (line 106):
-```python
-'device_ip': '192.168.1.201',  # LiDAR IP address
+ros2 run rtabmap_slam rtabmap --version 2>&1 | grep "RTAB-Map:"
+# Expected: RTAB-Map: 0.23.x (NOT 0.22.1)
 ```
 
-**Network setup:**
-- LiDAR default IP: 192.168.1.201
-- Set Jetson static IP: 192.168.1.100
-- Subnet mask: 255.255.255.0
+### Velodyne
+```bash
+ros2 pkg list | grep velodyne
+# Expected:
+#   velodyne
+#   velodyne_driver
+#   velodyne_laserscan
+#   velodyne_msgs
+#   velodyne_pointcloud
+```
 
-### RTAB-Map Parameters
+### ZED SDK & ROS Wrapper
+```bash
+# SDK version
+cat /usr/local/zed/include/sl/Camera.hpp | grep ZED_SDK_MAJOR_VERSION
+# Expected: #define ZED_SDK_MAJOR_VERSION 5
 
-Key parameters in `launch/pegasus_slam.launch.py`:
-```python
-# Feature detection
-'Kp/MaxFeatures': '500',        # Increase for better accuracy
-'Vis/MaxFeatures': '1000',
+# ROS wrapper
+ros2 pkg list | grep zed
+# Expected:
+#   zed_components
+#   zed_ros2_interfaces
+#   zed_wrapper
+```
 
-# Map resolution
-'Grid/CellSize': '0.05',        # 5cm cells (default)
+### ZED X Camera
+```bash
+/usr/local/zed/tools/ZED_Explorer -a
+# Expected: your ZED X with serial number and State: "AVAILABLE"
+```
 
-# Odometry
-'Odom/ImageDecimation': '1',    # 1=full resolution, 2=half
+### GMSL Daemon (Jetson only)
+```bash
+sudo systemctl status nvargus-daemon
+# Expected: active (running)
+```
+
+### PX4 Messages
+```bash
+ros2 pkg list | grep px4_msgs
+# Expected: px4_msgs
+```
+
+### XRCE-DDS Agent
+```bash
+which micro-xrce-dds-agent
+# Expected: /snap/bin/micro-xrce-dds-agent
+```
+
+### Pegasus Package
+```bash
+ros2 pkg list | grep pegasus_ros
+# Expected: pegasus_ros
+
+ros2 pkg executables pegasus_ros
+# Expected:
+#   pegasus_ros front_stereo_node
+#   pegasus_ros mission_planner_node
+#   pegasus_ros px4_imu_bridge_node
+#   pegasus_ros px4_state_subscriber_node
+```
+
+### Velodyne Network
+```bash
+ping -c 4 192.168.1.201
+# Expected: 4 packets transmitted, 4 received, 0% packet loss
+```
+
+### Pixhawk Serial Port
+```bash
+ls -l /dev/ttyTHS1    # Jetson UART
+# or
+ls -l /dev/ttyACM0    # USB
+```
+
+### Full Dependency Check
+```bash
+cd ~/Ros-workspace
+rosdep check --from-paths src --ignore-src -r
+# Expected: All system dependencies have been satisfied
 ```
 
 ---
@@ -273,59 +399,45 @@ Key parameters in `launch/pegasus_slam.launch.py`:
 ros2 launch pegasus_ros pegasus_full.launch.py
 ```
 
-This starts:
-- ZED X camera driver
-- VLP-16 LiDAR driver
-- XRCE-DDS agent (Pixhawk communication)
-- RTAB-Map SLAM
-- Mission planner node
-- RViz visualization
-
 ### Launch Individual Components
 
-#### Sensors Only
 ```bash
+# Sensors only
 ros2 launch pegasus_ros pegasus_sensors.launch.py
-```
 
-Optional arguments:
-```bash
-ros2 launch pegasus_ros pegasus_sensors.launch.py \
-    enable_zed:=false \
-    enable_lidar:=false \
-    enable_xrce:=false
-```
-
-#### SLAM Only
-```bash
+# SLAM only (sensors must be running)
 ros2 launch pegasus_ros pegasus_slam.launch.py
-```
 
-Optional arguments:
-```bash
 # Localization mode (use existing map)
 ros2 launch pegasus_ros pegasus_slam.launch.py \
     localization:=true \
     database_path:=/path/to/map.db
-
-# Disable RViz
-ros2 launch pegasus_ros pegasus_slam.launch.py \
-    rviz:=false
 ```
 
-#### Individual Nodes
+### Disable Individual Sensors
+
 ```bash
-# Mission planner
-ros2 run pegasus_ros mission_planner_node
+# Without camera
+ros2 launch pegasus_ros pegasus_sensors.launch.py enable_zed:=false
 
-# PX4 state monitor
-ros2 run pegasus_ros px4_state_subscriber_node
+# Without LiDAR
+ros2 launch pegasus_ros pegasus_sensors.launch.py enable_lidar:=false
 
-# Front camera processing
-ros2 run pegasus_ros front_stereo_node
+# Without Pixhawk
+ros2 launch pegasus_ros pegasus_sensors.launch.py enable_xrce:=false
+
+# Without IMU bridge
+ros2 launch pegasus_ros pegasus_sensors.launch.py enable_imu_bridge:=false
+```
+
+### Custom VLP-16 IP
+
+```bash
+ros2 launch pegasus_ros pegasus_full.launch.py velodyne_ip:=192.168.1.201
 ```
 
 ### Simulation Mode
+
 ```bash
 ros2 launch pegasus_ros pegasus_full.launch.py \
     use_sim_time:=true \
@@ -334,353 +446,250 @@ ros2 launch pegasus_ros pegasus_full.launch.py \
 
 ---
 
-## ROS Topics Reference
+## Post-Launch Verification
 
-### RTAB-Map SLAM Outputs
+Run these in a **second terminal** while SLAM is running.
 
-| Topic | Type | Frequency | Description |
-|-------|------|-----------|-------------|
-| `/rtabmap/odom` | `nav_msgs/Odometry` | 10-20 Hz | SLAM-corrected pose estimate |
-| `/rtabmap/cloud_map` | `sensor_msgs/PointCloud2` | 1 Hz | 3D point cloud map |
-| `/rtabmap/grid_map` | `nav_msgs/OccupancyGrid` | 1 Hz | 2D occupancy grid for navigation |
-| `/rtabmap/info` | `rtabmap_msgs/Info` | Variable | SLAM statistics and diagnostics |
-
-### PX4 Topics (via XRCE-DDS)
-
-| Topic | Type | Frequency | Description |
-|-------|------|-----------|-------------|
-| `/fmu/out/vehicle_odometry` | `px4_msgs/VehicleOdometry` | 50 Hz | PX4 EKF position estimate |
-| `/fmu/out/sensor_combined` | `px4_msgs/SensorCombined` | 100 Hz | Raw IMU data |
-| `/fmu/out/battery_status` | `px4_msgs/BatteryStatus` | 1 Hz | Battery voltage and current |
-| `/fmu/out/vehicle_status` | `px4_msgs/VehicleStatus` | 1 Hz | Armed state, flight mode |
-
-### Mission Planner Topics
-
-| Topic | Type | Frequency | Description |
-|-------|------|-----------|-------------|
-| `/pegasus/autonomy/mission_status` | `std_msgs/String` | 1 Hz | Current mission state |
-| `/pegasus/autonomy/target_waypoint` | `geometry_msgs/PoseStamped` | Variable | Goal position for navigation |
-
-### Sensor Topics
-
-| Topic | Type | Frequency | Description |
-|-------|------|-----------|-------------|
-| `/velodyne_points` | `sensor_msgs/PointCloud2` | 10 Hz | VLP-16 3D point cloud |
-| `/zed_x/zed_node/left/image_rect_color` | `sensor_msgs/Image` | 30 Hz | Left rectified image |
-| `/zed_x/zed_node/right/image_rect_color` | `sensor_msgs/Image` | 30 Hz | Right rectified image |
-| `/zed_x/zed_node/left/camera_info` | `sensor_msgs/CameraInfo` | 30 Hz | Camera calibration |
-
----
-
-## Package Structure
+### Check all expected topics
+```bash
+ros2 topic list
+# Expected (among others):
+#   /velodyne_points
+#   /zed_x/zed_node/rgb/image_rect_color
+#   /zed_x/zed_node/rgb/camera_info
+#   /zed_x/zed_node/depth/depth_registered
+#   /pegasus/imu/data
+#   /odom
+#   /rtabmap/mapData
+#   /rtabmap/grid_map
+#   /rtabmap/cloud_map
+#   /tf
+#   /tf_static
 ```
-pegasus_ros/
-├── launch/
-│   ├── pegasus_sensors.launch.py      # Sensor drivers + XRCE-DDS
-│   ├── pegasus_slam.launch.py         # RTAB-Map SLAM
-│   ├── pegasus_full.launch.py         # Complete system
-│   └── vtol1_gazebo_bridge_launch.py  # Simulation bridge
-│
-├── pegasus_autonomy/                   # Python package
-│   ├── __init__.py
-│   ├── mission_planner_node.py        # High-level mission logic
-│   ├── front_stereo_node.py           # Front camera processing
-│   └── px4_state_subscriber_node.py   # PX4 state monitoring
-│
-├── config/
-│   └── rviz_slam.rviz                 # RViz configuration
-│
-├── maps/                               # RTAB-Map database storage
-│   └── .gitkeep
-│
-├── resource/
-│   └── pegasus_ros                    # Package marker
-│
-├── test/                               # Unit tests
-│   ├── test_copyright.py
-│   ├── test_flake8.py
-│   └── test_pep257.py
-│
-├── package.xml                         # ROS package manifest
-├── setup.py                            # Python package configuration
-├── setup.cfg                           # Build configuration
-└── README.md                           # This file
+
+### Check topic publish rates
+```bash
+ros2 topic hz /velodyne_points                             # Expected: ~10 Hz
+ros2 topic hz /zed_x/zed_node/rgb/image_rect_color        # Expected: ~30 Hz
+ros2 topic hz /pegasus/imu/data                            # Expected: ~50 Hz
+ros2 topic hz /odom                                        # Expected: ~10 Hz
+```
+
+### Verify TF tree
+```bash
+ros2 run tf2_tools view_frames
+# Open frames.pdf and confirm:
+#   map → odom → base_link → velodyne
+#                           → zed_x_camera_center
+#                           → imu_link
+```
+
+### Verify ICP odometry is working
+Look for in the terminal output:
+```
+[icp_odometry] Odom: ratio=0.5xx, std dev=0.00Xm|0.00Xrad
+```
+
+If you see `ratio=0.000000`: the VLP-16 is not publishing correctly, or `Icp/MaxTranslation` is too small.
+
+### Check for duplicate Velodyne nodes
+```bash
+ros2 node list | grep velodyne
+# Expected (exactly):
+#   /velodyne_convert
+#   /velodyne_driver
+```
+
+If you see duplicates, kill everything and relaunch:
+```bash
+killall velodyne_driver_node velodyne_transform_node
+pkill -f "ros2 launch"
 ```
 
 ---
 
-## Development Guide
+## Topic Map
 
-### Building After Changes
-```bash
-cd ~/Ros-workspace
+```
+/velodyne_points                              ← assembled point cloud (~10 Hz)
+/zed_x/zed_node/rgb/image_rect_color         ← ZED X RGB
+/zed_x/zed_node/rgb/camera_info              ← ZED X camera calibration
+/zed_x/zed_node/depth/depth_registered       ← ZED X neural depth
+/pegasus/imu/data                             ← bridged Pixhawk IMU (sensor_msgs/Imu)
+/odom                                         ← LiDAR ICP odometry
+/fmu/out/vehicle_odometry                     ← PX4 EKF odometry (not used by SLAM)
+/fmu/out/sensor_combined                      ← raw PX4 IMU (consumed by bridge)
+/fmu/out/vehicle_attitude                     ← PX4 orientation (consumed by bridge)
+/fmu/out/battery_status                       ← battery monitoring
 
-# Build single package (fast - 2-3 seconds)
-colcon build --symlink-install --packages-select pegasus_ros
-
-# Recreate symlink
-cd install/pegasus_ros/lib
-ln -sf pegasus_autonomy pegasus_ros
-
-# Source workspace
-source install/setup.bash
+/rtabmap/mapData                              ← SLAM graph
+/rtabmap/grid_map                             ← 2D occupancy grid
+/rtabmap/cloud_map                            ← 3D point cloud map
+/rtabmap/odom                                 ← RTAB-Map corrected odometry
+/pegasus/autonomy/mission_status              ← mission planner status
+/pegasus/autonomy/target_waypoint             ← goal position
+/tf, /tf_static                               ← transform tree
 ```
 
-### Adding New Nodes
+---
 
-1. Create Python file in `pegasus_autonomy/`:
-```bash
-   nano pegasus_autonomy/new_node.py
+## Configuration Files
+
+All tunable parameters are in YAML files under `config/`:
+
+| File | What it controls |
+|---|---|
+| `rtabmap.yaml` | SLAM parameters, ICP settings, grid map resolution, visual features |
+| `zed_x.yaml` | Camera resolution, depth mode, frame rate, serial number |
+| `vlp16.yaml` | Point cloud conversion, min/max range |
+| `rviz_slam.rviz` | RViz display layout |
+
+### Tuning for Jetson Orin AGX (high performance)
+Edit `config/rtabmap.yaml`:
+```yaml
+Kp/MaxFeatures: "800"
+Vis/MaxFeatures: "1500"
+Odom/ImageDecimation: "1"
 ```
 
-2. Add entry point in `setup.py`:
-```python
-   entry_points={
-       'console_scripts': [
-           'new_node = pegasus_autonomy.new_node:main',
-       ],
-   },
+### Tuning for Jetson Xavier NX (balanced)
+```yaml
+Kp/MaxFeatures: "500"
+Vis/MaxFeatures: "1000"
+Odom/ImageDecimation: "1"
 ```
 
-3. Build and test:
-```bash
-   colcon build --symlink-install --packages-select pegasus_ros
-   ros2 run pegasus_ros new_node
-```
-
-### Modifying Launch Files
-
-Launch files support immediate changes with `--symlink-install`:
-```bash
-# Edit launch file
-nano launch/pegasus_full.launch.py
-
-# Run immediately (no rebuild needed)
-ros2 launch pegasus_ros pegasus_full.launch.py
-```
-
-### Testing
-```bash
-# Run all tests
-cd ~/Ros-workspace
-colcon test --packages-select pegasus_ros
-
-# View test results
-colcon test-result --verbose
-```
-
-### Code Style
-
-- **Python**: Follow PEP 8 guidelines
-- **Comments**: Explain intent and rationale, not implementation
-- **Docstrings**: Use Google-style docstrings for all public functions
-- **Type hints**: Include type annotations for function parameters and returns
-
-### Git Workflow
-```bash
-# Create feature branch
-git checkout -b feature/new-functionality
-
-# Make changes and commit
-git add .
-git commit -m "Add: Brief description of changes"
-
-# Push and create pull request
-git push origin feature/new-functionality
+### Tuning for CPU-limited platforms
+```yaml
+Kp/MaxFeatures: "300"
+Vis/MaxFeatures: "600"
+Odom/ImageDecimation: "2"
+Icp/Iterations: "20"
 ```
 
 ---
 
 ## Troubleshooting
 
-### XRCE-DDS Agent Connection Issues
-
-**Symptom**: No `/fmu/out/*` topics
-
-**Solution**:
+### RTAB-Map database version mismatch
+```
+Opened database version (0.23.4) is more recent than rtabmap installed version (0.22.1)
+```
+The apt version is still being loaded. Run:
 ```bash
-# Check serial port exists
-ls -l /dev/ttyTHS1
+sudo apt remove -y ros-humble-rtabmap ros-humble-rtabmap-ros
+rm ~/.ros/rtabmap.db
+# Open fresh terminal and source workspace
+```
 
+### Velodyne publishing at 70 Hz instead of 10 Hz
+Duplicate nodes from a previous launch:
+```bash
+killall velodyne_driver_node velodyne_transform_node
+pkill -f "ros2 launch"
+pkill -f component_container_isolated
+```
+
+### ZED X not detected
+```bash
+sudo systemctl restart nvargus-daemon
+# Wait a few seconds, then relaunch
+```
+
+### No /pegasus/imu/data topic
+Check that the IMU bridge is running and receiving PX4 data:
+```bash
+ros2 node list | grep imu_bridge
+ros2 topic echo /fmu/out/sensor_combined --once
+```
+
+### XRCE-DDS agent not connecting
+```bash
 # Test agent manually
 micro-xrce-dds-agent serial --dev /dev/ttyTHS1 -b 921600
+# Should show: running...
 
-# Expected output: "TermiosAgentLinux.cpp | init | running..."
+# Check serial permissions
+sudo usermod -a -G dialout $USER
+# Logout and login required
 ```
 
-**Common fixes**:
-- Verify serial port name in launch file
-- Check cable connections
-- Ensure PX4 XRCE-DDS client is enabled in firmware
-
-### VLP-16 Not Publishing Data
-
-**Symptom**: No `/velodyne_points` topic
-
-**Solution**:
+### VLP-16 not reachable
 ```bash
-# Verify network connectivity
 ping 192.168.1.201
-
-# Check network interface
-ifconfig
-
-# Verify LiDAR IP in launch file
-grep device_ip launch/pegasus_sensors.launch.py
+# If unreachable:
+#   1. Check Ethernet cable
+#   2. Set Jetson static IP to 192.168.1.100 (same subnet)
+#   3. Verify LiDAR power supply
 ```
 
-**Common fixes**:
-- Set Jetson static IP in same subnet (192.168.1.x)
-- Check Ethernet cable
-- Verify LiDAR power supply
-
-### RTAB-Map Not Starting
-
-**Symptom**: SLAM nodes not appearing in `ros2 node list`
-
-**Solution**:
+### RTAB-Map not creating map nodes
+The vehicle must move at least 0.1m or 0.05rad before the first node is created. Move the UAV and check:
 ```bash
-# Check RTAB-Map installed
-ros2 pkg list | grep rtabmap
-
-# Verify camera topics exist
-ros2 topic list | grep zed_x
-
-# Check launch file errors
-ros2 launch pegasus_ros pegasus_slam.launch.py --show-args
+ros2 topic echo /rtabmap/mapData --once
 ```
 
-**Common fixes**:
-- Ensure ZED X camera is connected and detected
-- Verify camera driver is publishing images
-- Check RTAB-Map parameters for typos
-
-### Build Failures
-
-**Symptom**: `colcon build` fails
-
-**Solution**:
+### Build failures
 ```bash
 # Clean build
 cd ~/Ros-workspace
 rm -rf build/ install/ log/
+colcon build --symlink-install \
+  --cmake-args -DCMAKE_BUILD_TYPE=Release \
+  --packages-skip zed_debug
+```
 
-# Rebuild
+---
+
+## Building After Code Changes
+
+```bash
+cd ~/Ros-workspace
+
+# Build single package (fast — 2-3 seconds)
 colcon build --symlink-install --packages-select pegasus_ros
 
-# Recreate symlink
-cd install/pegasus_ros/lib
-ln -s pegasus_autonomy pegasus_ros
-```
-
-### Missing Executables
-
-**Symptom**: `ros2 pkg executables pegasus_ros` returns nothing
-
-**Solution**:
-```bash
-# Verify symlink exists
-ls -la ~/Ros-workspace/install/pegasus_ros/lib/pegasus_ros
-
-# If missing, create it
-cd ~/Ros-workspace/install/pegasus_ros/lib
-ln -s pegasus_autonomy pegasus_ros
-
 # Source workspace
-source ~/Ros-workspace/install/setup.bash
+source install/setup.bash
 ```
 
 ---
 
-## Performance Optimization
+## Recording & Playback
 
-### RTAB-Map Tuning
+```bash
+# Record all topics
+ros2 bag record -a -o flight_test_001
 
-For Jetson Orin AGX (high performance):
-```python
-'Kp/MaxFeatures': '800',
-'Vis/MaxFeatures': '1500',
-'Odom/ImageDecimation': '1',  # Full resolution
+# Record specific topics
+ros2 bag record \
+  /odom /velodyne_points /pegasus/imu/data \
+  /zed_x/zed_node/rgb/image_rect_color \
+  /zed_x/zed_node/depth/depth_registered \
+  -o flight_test_001
+
+# Play back
+ros2 bag play flight_test_001 --clock
+
+# Run SLAM on recorded data
+ros2 launch pegasus_ros pegasus_slam.launch.py use_sim_time:=true
 ```
-
-For Jetson Xavier NX (balanced):
-```python
-'Kp/MaxFeatures': '500',
-'Vis/MaxFeatures': '1000',
-'Odom/ImageDecimation': '1',
-```
-
-For CPU-limited platforms:
-```python
-'Kp/MaxFeatures': '300',
-'Vis/MaxFeatures': '600',
-'Odom/ImageDecimation': '2',  # Half resolution
-```
-
-### Build Time Optimization
-
-Separate `px4_msgs` workspace reduces daily build time from 8+ minutes to 2-3 seconds.
-
----
-
-## Contributing
-
-### Code Contributions
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes following code style guidelines
-4. Add tests for new functionality
-5. Submit pull request with detailed description
-
-### Bug Reports
-
-Include the following information:
-- ROS 2 version and OS
-- Hardware configuration
-- Steps to reproduce
-- Expected vs actual behavior
-- Relevant log files
-
-### Feature Requests
-
-Describe:
-- Use case and motivation
-- Proposed implementation approach
-- Potential impact on existing functionality
-
----
-
-## License
-
-MIT License
-
-Copyright (c) 2025 Cal Poly Pomona - Team Pegasus
 
 ---
 
 ## Team
 
-**Autonomy Lead**: Changwe  
-**Institution**: California Polytechnic State University, Pomona  
-**Sponsor**: Lockheed Martin  
+**Autonomy Lead**: Changwe
+**Institution**: California Polytechnic State University, Pomona
+**Sponsor**: Lockheed Martin
 **Project**: Disaster Response eVTOL UAV
-
----
-
-## Acknowledgments
-
-- Lockheed Martin for project sponsorship
-- Cal Poly Pomona College of Engineering
-- RTAB-Map development team
-- PX4 Development Team
-- ROS 2 community
 
 ---
 
 ## References
 
 - [RTAB-Map Documentation](http://wiki.ros.org/rtabmap_ros)
+- [RTAB-Map GitHub](https://github.com/introlab/rtabmap)
 - [PX4 User Guide](https://docs.px4.io/)
 - [PX4 XRCE-DDS](https://docs.px4.io/main/en/middleware/uxrce_dds.html)
 - [ZED SDK Documentation](https://www.stereolabs.com/docs/)
@@ -689,5 +698,5 @@ Copyright (c) 2025 Cal Poly Pomona - Team Pegasus
 
 ---
 
-**Last Updated**: February 2025  
-**Version**: 1.0.0
+**Last Updated**: February 2026
+**Version**: 2.0.0

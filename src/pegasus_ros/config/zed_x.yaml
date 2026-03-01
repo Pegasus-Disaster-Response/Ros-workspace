@@ -1,0 +1,66 @@
+# ============================================================
+#  ZED X Camera Config — Pegasus Disaster Response UAV
+#  Single front-facing ZED X for SLAM + perception
+#  Namespace: /zed_x
+# ============================================================
+
+zed_node:
+  ros__parameters:
+
+    # ── Camera Identity ──────────────────────────────────────
+    camera_model: 'zedx'
+    camera_name: 'zed_x'
+    serial_number: 0                  # ← SET THIS to your ZED X serial number
+    #                                 #   Find it: /usr/local/zed/tools/ZED_Explorer
+
+    # ── Frames ───────────────────────────────────────────────
+    base_frame: 'base_link'
+    camera_frame: 'zed_x_camera_center'
+    publish_tf: false                 # RTAB-Map handles TF
+    publish_map_tf: false
+    publish_imu_tf: false             # Pixhawk IMU is used, not ZED IMU
+
+    # ── Resolution & Frame Rate ──────────────────────────────
+    general.grab_resolution: 'HD1080' # 1920x1080 — full res for SLAM
+    general.grab_frame_rate: 30       # 30 Hz front camera
+    general.self_calib: true
+
+    # ── Depth ────────────────────────────────────────────────
+    # NEURAL depth mode produces highest quality depth maps
+    # which RTAB-Map uses directly in RGB-D mode
+    depth.depth_mode: 'NEURAL'        # NEURAL | PERFORMANCE | QUALITY | ULTRA
+    depth.min_depth: 0.3              # ZED X min reliable depth (m)
+    depth.max_depth: 20.0             # ZED X max reliable depth (m)
+    depth.depth_stabilization: 1
+
+    # ── Image Output ─────────────────────────────────────────
+    video.img_downsample_factor: 1.0
+    video.brightness: 4
+    video.contrast: 4
+    video.hue: 0
+    video.saturation: 4
+    video.sharpness: 4
+    video.gamma: 8
+    video.auto_exposure_gain: true
+    video.auto_whitebalance: true
+
+    # ── Point Cloud ──────────────────────────────────────────
+    point_cloud_freq: 5.0             # Low Hz — RTAB-Map uses depth image directly
+    mapping.mapping_enabled: false    # RTAB-Map handles mapping
+
+    # ── Internal Odometry ────────────────────────────────────
+    pos_tracking_enabled: false       # Disable ZED odometry — RTAB-Map does this
+
+    # ── Stereo Publishing ────────────────────────────────────
+    # Publish depth for RTAB-Map RGB-D mode
+    publish_stereo: true
+    publish_left_camera: true
+    publish_right_camera: true
+    publish_depth: true
+
+    # ── IMU ──────────────────────────────────────────────────
+    sensors.publish_imu_tf: false
+    sensors.sensors_image_sync: false
+
+    # ── QoS ──────────────────────────────────────────────────
+    use_sim_time: false

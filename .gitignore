@@ -3,7 +3,21 @@ install/
 log/
 *.pyc
 __pycache__/
+*.egg-info/
 .vscode/
+.idea/
 *.swp
 *.swo
 *~
+
+# RTAB-Map databases
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cloned source packages (built from source, not tracked)
+src/rtabmap/
+src/rtabmap_ros/
+src/zed-ros2-wrapper/
