@@ -1,61 +1,62 @@
-from setuptools import find_packages, setup
 import os
 from glob import glob
+from setuptools import setup
 
 package_name = 'pegasus_ros'
 
 setup(
     name=package_name,
-    version='1.0.0',
-    packages=find_packages(exclude=['test']),
+    version='2.0.0',
+    packages=[package_name.replace('pegasus_ros', 'pegasus_autonomy')],
     data_files=[
+        # ── Package index (required by ament) ──
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        # Launch files
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
-        # Config files
-        (os.path.join('share', package_name, 'config'), glob('config/*')),
-        # Maps directory
-        (os.path.join('share', package_name, 'maps'), ['maps/.gitkeep']),
+
+        # ── Config files ──
+        (os.path.join('share', package_name, 'config'), [
+            'config/rtabmap.yaml',
+            'config/vlp16.yaml',
+            'config/zed_x.yaml',
+            'config/rviz_slam.rviz',
+            'config/local_costmap.yaml',            # 3D local costmap parameters
+            'config/rviz_local_costmap.rviz',       # RViz config for costmap visualization
+        ]),
+
+        # ── Launch files ──
+        (os.path.join('share', package_name, 'launch'), [
+            'launch/pegasus_full.launch.py',
+            'launch/pegasus_sensors.launch.py',
+            'launch/pegasus_slam.launch.py',
+            'launch/vtol1_gazebo_bridge_launch.py',
+            'launch/local_costmap.launch.py',       # 3D local costmap launch
+        ]),
+
+        # ── Map files ──
+        (os.path.join('share', package_name, 'maps'),
+            glob('maps/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='Team Pegasus - Cal Poly Pomona',
-    maintainer_email='changwe@calpoly.edu',
+    maintainer_email='cbmusonda@cpp.edu',
     description='Pegasus Disaster Response UAV Autonomy Package',
     license='MIT',
-    extras_require={
-        'test': [
-            'pytest',
-        ],
-    },
+    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            # ── Core autonomy nodes ──
             'mission_planner_node = pegasus_autonomy.mission_planner_node:main',
             'front_stereo_node = pegasus_autonomy.front_stereo_node:main',
             'px4_state_subscriber_node = pegasus_autonomy.px4_state_subscriber_node:main',
             'px4_imu_bridge_node = pegasus_autonomy.px4_imu_bridge_node:main',
+            'odometry_selector_node = pegasus_autonomy.odometry_selector_node:main',
+
+            # ── 3D Local costmap nodes ──
+            'lidar_costmap_layer_node = pegasus_autonomy.lidar_costmap_layer_node:main',
+            'zed_depth_costmap_layer_node = pegasus_autonomy.zed_depth_costmap_layer_node:main',
+            'local_costmap_node = pegasus_autonomy.local_costmap_node:main',
         ],
     },
-    # Force scripts to install in the correct location
-    options={
-        'install': {
-            'install_scripts': 'lib/' + package_name,
-        },
-    },
 )
-import subprocess
-import sys
-
-if 'install' in sys.argv:
-    install_base = os.path.join(os.path.dirname(__file__), '..', '..', 'install', package_name, 'lib')
-    if os.path.exists(install_base):
-        src = os.path.join(install_base, 'pegasus_autonomy')
-        dst = os.path.join(install_base, package_name)
-        if os.path.exists(src) and not os.path.exists(dst):
-            try:
-                os.symlink('pegasus_autonomy', dst)
-                print(f"Created symlink: {dst} -> pegasus_autonomy")
-            except:
-                pass

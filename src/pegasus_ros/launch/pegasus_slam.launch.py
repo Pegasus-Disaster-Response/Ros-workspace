@@ -89,8 +89,8 @@ def generate_launch_description():
             rtabmap_config,
             {
                 'frame_id': frame_id,
-                'odom_frame_id': odom_frame_id,
-                'publish_tf': True,
+                'odom_frame_id': 'odom_lidar',  # Separate frame for fusion
+                'publish_tf': False,  # Fusion node handles TF
                 'use_sim_time': use_sim_time,
                 'Icp/MaxTranslation': '1.0',
                 'Odom/Strategy': '0',
@@ -98,9 +98,57 @@ def generate_launch_description():
         ],
         remappings=[
             ('scan_cloud', scan_cloud_topic),
-            ('odom', '/odom'),
+            ('odom', '/odom_lidar'),  # Publish to separate topic
             ('imu', imu_topic),
         ],
+    )
+
+    # ══════════════════════════════════════════════════════════
+    # 2. RGB-D Visual Odometry (backup odometry source)
+    # ══════════════════════════════════════════════════════════
+    rgbd_odometry = Node(
+        package='rtabmap_odom',
+        executable='rgbd_odometry',
+        name='rgbd_odometry',
+        output='screen',
+        parameters=[
+            rtabmap_config,
+            {
+                'frame_id': frame_id,
+                'odom_frame_id': 'odom_vision',  # Separate frame for fusion
+                'publish_tf': False,  # Fusion node handles TF
+                'use_sim_time': use_sim_time,
+                'Odom/Strategy': '0',  # Frame-to-Map
+                'Odom/FeatureType': '6',  # GFTT/BRIEF
+                'Odom/ResetCountdown': '1',
+                'Odom/ImageDecimation': '1',
+                'OdomF2M/MaxSize': '2000',
+            },
+        ],
+        remappings=[
+            ('rgb/image', rgb_image_topic),
+            ('rgb/camera_info', rgb_camera_info_topic),
+            ('depth/image', depth_image_topic),
+            ('odom', '/odom_vision'),  # Publish to separate topic
+            ('imu', imu_topic),
+        ],
+    )
+
+    # ══════════════════════════════════════════════════════════
+    # 3. Odometry Fusion/Selector (fault-tolerant switching)
+    # ══════════════════════════════════════════════════════════
+    odometry_selector = Node(
+        package='pegasus_ros',
+        executable='odometry_selector_node',
+        name='odometry_selector',
+        output='screen',
+        parameters=[{
+            'primary_odom_topic': '/odom_lidar',
+            'backup_odom_topic': '/odom_vision',
+            'timeout_threshold': 0.5,  # Switch if no data for 0.5s
+            'use_sim_time': use_sim_time,
+        }],
+        # Publishes to /odom (what RTAB-Map expects)
     )
 
     # ══════════════════════════════════════════════════════════
@@ -279,8 +327,10 @@ def generate_launch_description():
         tf_base_to_zed_x,
         tf_base_to_imu,
 
-        # Odometry
+        # Odometry (dual sources with fusion)
         icp_odometry,
+        rgbd_odometry,
+        odometry_selector,
 
         # SLAM
         rtabmap_slam,
