@@ -22,6 +22,8 @@ setup(
             'config/rviz_slam.rviz',
             'config/local_costmap.yaml',            # 3D local costmap parameters
             'config/rviz_local_costmap.rviz',       # RViz config for costmap visualization
+            'config/path_planner.yaml',             # A* global planner parameters
+            'config/rviz_planner_test.rviz',        # RViz config for planner SIL test
         ]),
 
         # ── Launch files ──
@@ -31,6 +33,13 @@ setup(
             'launch/pegasus_slam.launch.py',
             'launch/vtol1_gazebo_bridge_launch.py',
             'launch/local_costmap.launch.py',       # 3D local costmap launch
+            'launch/path_planner.launch.py',        # A* global planner launch
+            'launch/gazebo_planner_test.launch.py', # SIL test: A* on static map
+        ]),
+
+        # ── World files (Gazebo SDF) ──
+        (os.path.join('share', package_name, 'worlds'), [
+            'worlds/pegasus_planning_test.sdf',
         ]),
 
         # ── Map files ──
@@ -57,6 +66,13 @@ setup(
             'lidar_costmap_layer_node = pegasus_autonomy.lidar_costmap_layer_node:main',
             'zed_depth_costmap_layer_node = pegasus_autonomy.zed_depth_costmap_layer_node:main',
             'local_costmap_node = pegasus_autonomy.local_costmap_node:main',
+
+            # ── Path planning nodes ──
+            'global_planner_node = pegasus_autonomy.global_planner_node:main',
+
+            # ── SIL test utility nodes ──
+            'static_map_publisher_node = pegasus_autonomy.static_map_publisher_node:main',
+            'static_odom_publisher_node = pegasus_autonomy.static_odom_publisher_node:main',
         ],
     },
 )

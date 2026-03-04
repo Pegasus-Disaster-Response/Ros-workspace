@@ -64,7 +64,7 @@ local_costmap_node:
 
     # ── Inflation ──────────────────────────────────────
     inflation:
-      radius_m: 2.5                   # safety buffer around obstacles
+      radius_m: 3.0                   # safety buffer around obstacles
                                        # should be >= half wingspan (15ft/2 ≈ 2.3m)
       cost_scaling_factor: 5.0        # exponential dropoff steepness
                                        # higher = sharper dropoff, tighter paths

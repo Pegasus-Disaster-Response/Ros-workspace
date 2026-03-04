@@ -107,6 +107,21 @@ def generate_launch_description():
         parameters=[{'use_sim_time': use_sim_time}],
     )
 
+    # ── Global Path Planner (A*) ──────────────────────────────
+    planner_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'path_planner.yaml'])
+
+    global_planner = Node(
+        package='pegasus_ros',
+        executable='global_planner_node',
+        name='global_planner_node',
+        output='screen',
+        parameters=[
+            planner_config,
+            {'use_sim_time': use_sim_time},
+        ],
+    )
+
     return LaunchDescription([
         # Arguments
         use_sim_time_arg,
@@ -121,4 +136,5 @@ def generate_launch_description():
         slam,
         mission_planner,
         px4_state_subscriber,
+        global_planner,
     ])
