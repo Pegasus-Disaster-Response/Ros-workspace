@@ -1,7 +1,14 @@
 #!/usr/bin/env python3
 """
 Pegasus Full System Launch
-Complete system: Sensors + SLAM + Mission Planning
+Complete system: Sensors + SLAM + Local Costmap + Path Planning
+
+v2.3 changes:
+  - Fix #4: Added local_costmap.launch.py include. Previously the
+    full launch did NOT start costmap nodes (lidar_costmap_layer,
+    zed_depth_costmap_layer, local_costmap_node), so the entire
+    3D costmap pipeline was missing from full system runs.
+  - Added enable_costmap argument for disabling costmap in test modes.
 
 Author: Team Pegasus
 Date: 2026
@@ -46,11 +53,17 @@ def generate_launch_description():
         description='VLP-16 IP address'
     )
 
+    enable_costmap_arg = DeclareLaunchArgument(
+        'enable_costmap', default_value='true',
+        description='Launch 3D local costmap nodes'
+    )
+
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_gazebo_bridge = LaunchConfiguration('launch_gazebo_bridge')
     localization = LaunchConfiguration('localization')
     rviz = LaunchConfiguration('rviz')
     velodyne_ip = LaunchConfiguration('velodyne_ip')
+    enable_costmap = LaunchConfiguration('enable_costmap')
 
     # ── Gazebo Bridge (Optional) ─────────────────────────────
     gazebo_bridge = IncludeLaunchDescription(
@@ -87,6 +100,17 @@ def generate_launch_description():
             'localization': localization,
             'rviz': rviz,
         }.items(),
+    )
+
+    # ── 3D Local Costmap ─────────────────────────────────────
+    # Fix #4: This was completely missing from the full launch.
+    local_costmap = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([
+                pegasus_share, 'launch', 'local_costmap.launch.py'
+            ])
+        ]),
+        condition=IfCondition(enable_costmap),
     )
 
     # ── Mission Planning Node ────────────────────────────────
@@ -129,11 +153,13 @@ def generate_launch_description():
         localization_arg,
         rviz_arg,
         velodyne_ip_arg,
+        enable_costmap_arg,
 
         # Launch components
         gazebo_bridge,
         sensors,
         slam,
+        local_costmap,              # Fix #4: now included
         mission_planner,
         px4_state_subscriber,
         global_planner,

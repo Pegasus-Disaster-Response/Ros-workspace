@@ -1,6 +1,6 @@
 # Pegasus Disaster Response UAV — Autonomous Navigation System
 
-**Version:** 2.2.0
+**Version:** 2.3.0
 **Institution:** California Polytechnic State University, Pomona
 **Team:** Pegasus
 **Sponsor:** Lockheed Martin
@@ -8,7 +8,7 @@
 
 **Sensors:** ZED X (single, front-facing) · Velodyne VLP-16 · Pixhawk Cube Orange (IMU)
 **SLAM:** RTAB-Map (LiDAR ICP odometry + RGB-D loop closure + IMU fusion)
-**Local Mapping:** 3D voxel costmap with dual-sensor fusion + degraded mode handling
+**Local Mapping:** 3D voxel costmap with dual-sensor fusion + RANSAC ground removal + degraded mode handling
 **Path Planning:** A* global planner with static map SIL testing
 
 ---
@@ -24,6 +24,8 @@ Ros-workspace/
     ├── pegasus_ros/                ← custom package (configs + launches + nodes)
     │   ├── config/
     │   │   ├── rtabmap.yaml        ← RTAB-Map SLAM tuning parameters
+    │   │   ├── icp_odometry.yaml   ← ICP LiDAR odometry config (v2.3)
+    │   │   ├── rgbd_odometry.yaml  ← RGB-D visual odometry config (v2.3)
     │   │   ├── vlp16.yaml          ← Velodyne point cloud conversion settings
     │   │   ├── zed_x.yaml          ← ZED X camera configuration
     │   │   ├── rviz_slam.rviz      ← RViz display configuration (SLAM)
@@ -34,7 +36,7 @@ Ros-workspace/
     │   ├── launch/
     │   │   ├── pegasus_full.launch.py        ← complete system (sensors + SLAM + costmap + planner)
     │   │   ├── pegasus_sensors.launch.py     ← sensor drivers + XRCE-DDS + IMU bridge
-    │   │   ├── pegasus_slam.launch.py        ← RTAB-Map SLAM + static TFs
+    │   │   ├── pegasus_slam.launch.py        ← RTAB-Map SLAM + dual odometry + static TFs
     │   │   ├── local_costmap.launch.py       ← 3D costmap (LiDAR layer + ZED layer + fusion)
     │   │   ├── path_planner.launch.py        ← A* global planner (standalone)
     │   │   ├── gazebo_planner_test.launch.py ← SIL test: A* on static map in RViz
@@ -174,9 +176,10 @@ ros2 launch pegasus_ros pegasus_slam.launch.py rviz:=false
   ┌─────────────────────────────────────────────────────────────────────┐
   │                    SLAM / ESTIMATION LAYER                          │
   │                                                                     │
-  │  VLP-16 ──→ icp_odometry ──→ /odom                                 │
-  │  ZED X RGB-D + IMU ──→ RTAB-Map ──→ /tf (map→odom), /grid_map     │
-  │  odometry_selector ──→ best odometry source ──→ /odom              │
+  │  VLP-16 ──→ icp_odometry ──→ /odom_lidar ──┐                       │
+  │  ZED X RGB-D ──→ rgbd_odometry ──→ /odom_vision ──┤                │
+  │                                   odometry_selector ──→ /odom      │
+  │  RTAB-Map ← /odom + RGB-D + LiDAR + IMU ──→ /tf (map→odom)       │
   └──────┬──────────────────────────────────┬───────────────────────────┘
          │                                  │
          ▼                                  ▼
@@ -213,7 +216,7 @@ ros2 launch pegasus_ros pegasus_slam.launch.py rviz:=false
 
 ---
 
-## v2.2 Architecture Details
+## v2.3 Architecture Details
 
 ### A* Global Planner (v2.2 — NEW)
 
@@ -246,7 +249,7 @@ For testing the planner without any hardware, SLAM, or sensor pipeline:
 
 Three standalone nodes process sensor data into a rolling 3D voxel grid centered on the UAV:
 
-- **lidar_costmap_layer_node** — VLP-16 point cloud → ground removal → height band filter → voxel downsample → obstacle points
+- **lidar_costmap_layer_node** — VLP-16 point cloud → RANSAC ground plane removal → height band filter → voxel downsample → obstacle points
 - **zed_depth_costmap_layer_node** — ZED X depth image → deproject to 3D → range filter → height band filter → obstacle points
 - **local_costmap_node** — Fuses both obstacle streams into a 3D voxel grid (40×40×20m at 0.3m resolution). Handles obstacle decay, 3D inflation via distance transform, sensor health monitoring, and publishes both 3D markers (RViz) and a 2D occupancy grid projection.
 
@@ -258,14 +261,16 @@ Sensor health monitoring detects degraded modes automatically:
 
 ### SLAM (v2.0)
 
-v2.0 uses **LiDAR ICP odometry** from the VLP-16 as the primary odometry source. This is more robust in visually degraded disaster environments (smoke, dust, uniform textures).
+v2.0 uses **LiDAR ICP odometry** from the VLP-16 as the primary odometry source, with **RGB-D visual odometry** as a backup. The `odometry_selector_node` monitors both sources and publishes the best available one to `/odom`. Each odometry node loads its own dedicated YAML config (`icp_odometry.yaml`, `rgbd_odometry.yaml`) so that subscription parameters are correctly namespaced.
 
 ```
-VLP-16 → /velodyne_points → icp_odometry → /odom
-                                              ↓
-ZED X → rgb + depth ────────→ RTAB-Map SLAM (loop closure + mapping)
-                                              ↑
-Pixhawk → SensorCombined → px4_imu_bridge → /pegasus/imu/data
+VLP-16 → /velodyne_points → icp_odometry → /odom_lidar ──┐
+                                                           ├→ odometry_selector → /odom
+ZED X → rgb + depth → rgbd_odometry → /odom_vision ──────┘        ↓
+                                                            RTAB-Map SLAM
+ZED X → rgb + depth ────────────────────────────────────→ (loop closure + mapping)
+                                                                   ↑
+Pixhawk → SensorCombined → px4_imu_bridge → /pegasus/imu/data ────┘
 ```
 
 ### IMU Bridge
@@ -277,11 +282,11 @@ PX4's `SensorCombined` message is not a standard `sensor_msgs/Imu`. The `px4_imu
 All sensor transforms are explicitly published:
 ```
 map
- └── odom (published by rtabmap)
-      └── base_link
-           ├── velodyne             [0.3, 0.0, 0.15]   ← UPDATE to your mount
-           ├── zed_x_camera_center  [0.2, 0.0, 0.1]    ← UPDATE to your mount
-           └── imu_link             [0.0, 0.0, 0.0]     ← UPDATE to your mount
+ └── odom (published by rtabmap — map→odom)
+      └── base_link (published by odometry_selector — odom→base_link)
+           ├── velodyne             [0.52, 0.0, 0.85]  ← UPDATE to your mount
+           ├── zed_x_camera_center  [1.78, 0.0, 0.55]  ← UPDATE to your mount
+           └── imu_link             [0.0, 0.0, 0.0]    ← UPDATE to your mount
 ```
 
 ---
@@ -532,10 +537,12 @@ ros2 launch pegasus_ros pegasus_slam.launch.py use_sim_time:=true
 
 | File | Purpose | Key Parameters |
 |---|---|---|
-| `config/rtabmap.yaml` | SLAM tuning | Feature count, ICP settings, grid resolution, gravity alignment |
+| `config/rtabmap.yaml` | SLAM tuning (RTAB-Map node only) | ICP settings, grid resolution, loop closure, gravity alignment |
+| `config/icp_odometry.yaml` | ICP LiDAR odometry (primary) | subscribe_scan_cloud, ICP voxel/correspondence, odom strategy |
+| `config/rgbd_odometry.yaml` | RGB-D visual odometry (backup) | subscribe_rgb/depth, feature type, F2M size |
 | `config/zed_x.yaml` | Camera settings | Serial number, depth mode, resolution, frame rate |
 | `config/vlp16.yaml` | LiDAR settings | IP address, min/max range, calibration |
-| `config/local_costmap.yaml` | 3D costmap | Voxel grid size/resolution, sensor ranges, inflation, decay, degraded modes |
+| `config/local_costmap.yaml` | 3D costmap | Voxel grid size/resolution, sensor ranges, inflation, decay, RANSAC ground removal, degraded modes |
 | `config/path_planner.yaml` | A* global planner | Heuristic weight, diagonal movement, cost penalty, lethal threshold, altitude limits, replan frequency |
 
 ### Editing Parameters
@@ -596,4 +603,4 @@ To push paths further from obstacles, increase `cost_penalty_factor` (e.g., from
 ---
 
 **Last Updated**: March 2026
-**Version**: 2.2.0
+**Version**: 2.3.0

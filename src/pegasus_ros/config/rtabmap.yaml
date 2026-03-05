@@ -2,9 +2,15 @@
 #  RTAB-Map SLAM Configuration — Pegasus Disaster Response UAV
 #  Sensors: ZED X (RGB-D) + VLP-16 LiDAR + Pixhawk IMU
 #
-#  This file is loaded by both the rtabmap SLAM node and the
-#  stereo_odometry / icp_odometry nodes. Override per-node
-#  parameters in the launch file when needed.
+#  v2.3 changes:
+#    - Odometry-specific params (Odom/Strategy, Odom/FeatureType, etc.)
+#      moved to icp_odometry.yaml and rgbd_odometry.yaml (Fix #3).
+#    - Icp/MaxCorrespondenceDistance increased to 1.0 (Fix #5).
+#    - Stereo fallback params removed (not used in RGB-D mode).
+#
+#  This file is loaded by the RTAB-Map SLAM node (mapping +
+#  localization) and rtabmap_viz. Odometry nodes load their own
+#  dedicated config files instead.
 # ============================================================
 
 rtabmap:
@@ -22,23 +28,12 @@ rtabmap:
     Mem/STMSize: "30"
     Mem/UseOdomGravity: "true"        # Align map Z-axis with gravity via IMU
 
-    # ── Odometry ─────────────────────────────────────────────
-    Odom/Strategy: "0"                # 0=Frame-to-Map
-    Odom/FeatureType: "6"             # GFTT/BRIEF
-    Odom/ResetCountdown: "1"
-    Odom/ImageDecimation: "1"         # 1=full res, 2=half (reduce if CPU-limited)
-    OdomF2M/MaxSize: "2000"
-
-    # ── Stereo (kept for fallback, not used in RGB-D mode) ───
-    Stereo/MinDisparity: "1.0"
-    Stereo/MaxDisparity: "128.0"
-
-    # ── ICP LiDAR ────────────────────────────────────────────
+    # ── ICP LiDAR (used by RTAB-Map for loop closure verification) ──
     Icp/VoxelSize: "0.3"              # Outdoor: 0.3, Indoor: 0.1
-    Icp/MaxCorrespondenceDistance: "0.15"
+    Icp/MaxCorrespondenceDistance: "1.0"   # Fix #5: was 0.15 — must be > VoxelSize
     Icp/PointToPlane: "true"
     Icp/Iterations: "30"
-    Icp/MaxTranslation: "1.0"         # Max 1m motion between frames
+    Icp/MaxTranslation: "1.0"
     Icp/CorrespondenceRatio: "0.01"
 
     # ── Proximity / Loop Closure ─────────────────────────────
@@ -57,10 +52,10 @@ rtabmap:
     Optimizer/Robust: "true"
 
     # ── 3D Grid / Occupancy Map ──────────────────────────────
-    Grid/Sensor: "2"                  # 0=laser, 1=depth camera, 2=both (FAULT TOLERANT)
+    Grid/Sensor: "2"                  # 0=laser, 1=depth camera, 2=both
     Grid/3D: "true"
     Grid/CellSize: "0.05"            # 5 cm cells
-    Grid/RangeMax: "30.0"            # Max mapping range (meters)
+    Grid/RangeMax: "30.0"
     Grid/RangeMin: "0.5"
     Grid/MaxObstacleHeight: "2.0"
     Grid/MaxGroundHeight: "0.1"
@@ -75,8 +70,7 @@ rtabmap:
     Vis/InlierDistance: "0.1"
     SURF/HessianThreshold: "300"
 
-    # ── Subscription Modes ───────────────────────────────────
-    # RGB-D mode: use ZED X neural depth instead of stereo matching
+    # ── Subscription Modes (RTAB-Map SLAM node only) ─────────
     subscribe_rgb: true
     subscribe_depth: true
     subscribe_stereo: false
@@ -85,9 +79,9 @@ rtabmap:
 
     # ── Sync ─────────────────────────────────────────────────
     approx_sync: true
-    approx_sync_max_interval: 0.5     # 500ms tolerance (increased for sensor failures)
+    approx_sync_max_interval: 0.5
     queue_size: 30
-    wait_imu_to_init: false           # Don't block if IMU temporarily unavailable
+    wait_imu_to_init: false
 
     # ── IMU ──────────────────────────────────────────────────
     subscribe_imu: true

@@ -6,6 +6,13 @@ Subscribes to ZED X depth + camera_info, deprojects depth pixels into
 3D obstacle points in base_link frame, publishes obstacle cloud + sensor
 origin so the costmap node can raycast for free-space marking.
 
+v2.3 changes:
+  - Fix #6: camera_info subscriber QoS changed from RELIABLE to
+    BEST_EFFORT. The ZED wrapper publishes camera_info with BEST_EFFORT
+    by default. A RELIABLE subscriber cannot receive from a BEST_EFFORT
+    publisher, which caused intrinsics to never arrive and depth
+    processing to silently never start.
+
 Publishes:
   /pegasus/zed_obstacles  (PointCloud2 in base_link)
   /pegasus/zed_origin     (PointStamped in base_link — camera position)
@@ -107,13 +114,17 @@ class ZedDepthCostmapLayerNode(Node):
         sensor_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST, depth=5)
-        reliable_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
+
+        # Fix #6: camera_info QoS changed to BEST_EFFORT to match
+        # the ZED wrapper's default. RELIABLE cannot receive from
+        # BEST_EFFORT, causing silent failure.
+        cam_info_qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST, depth=5)
 
         self.cam_info_sub = self.create_subscription(
             CameraInfo, self.cam_info_topic,
-            self.camera_info_callback, reliable_qos)
+            self.camera_info_callback, cam_info_qos)
         self.depth_sub = self.create_subscription(
             Image, self.depth_topic, self.depth_callback, sensor_qos)
 
@@ -131,7 +142,7 @@ class ZedDepthCostmapLayerNode(Node):
         self.health_timer = self.create_timer(0.25, self.publish_health)
 
         self.get_logger().info(
-            f'ZED X costmap layer v2 — subscribing to {self.depth_topic}')
+            f'ZED X costmap layer v2.3 — subscribing to {self.depth_topic}')
 
     def camera_info_callback(self, msg: CameraInfo):
         if self.intrinsics_ready:

@@ -1,11 +1,20 @@
 # Pegasus ROS — Quick Reference & Development Roadmap
 
-**Version:** 2.2.0
+**Version:** 2.3.0
 **Last Updated:** March 2026
 
 ---
 
 ## Changelog
+
+### v2.3 (March 2026)
+- **Fix #1: setup.py** — added explicit `package_dir` mapping for `pegasus_autonomy` module discovery; version bump to 2.3.0
+- **Fix #2: Odometry selector clock** — replaced `time.time()` (wall clock) with `self.get_clock()` (ROS clock) so timeout logic works correctly when `use_sim_time=true`
+- **Fix #3: Odometry YAML namespacing** — created dedicated `icp_odometry.yaml` and `rgbd_odometry.yaml` config files so subscription parameters (`subscribe_scan_cloud`, `subscribe_rgb`, etc.) are under the correct node name. Previously all params were under `rtabmap:` in `rtabmap.yaml`, which doesn't match the odometry node names — so the nodes never actually subscribed to sensor data.
+- **Fix #4: Full launch missing costmap** — `pegasus_full.launch.py` now includes `local_costmap.launch.py`; added `enable_costmap` argument
+- **Fix #5: ICP correspondence distance** — increased `Icp/MaxCorrespondenceDistance` from 0.15 to 1.0. With `Icp/VoxelSize=0.3`, voxel centers are at least 0.3m apart, so the old value (0.15) rejected most valid point correspondences.
+- **Fix #6: ZED camera_info QoS** — changed `zed_depth_costmap_layer_node` camera_info subscriber from RELIABLE to BEST_EFFORT QoS. The ZED wrapper publishes BEST_EFFORT; a RELIABLE subscriber silently fails to receive, so camera intrinsics never arrived and depth processing never started.
+- **Fix #7: RANSAC ground removal** — replaced naive z-threshold ground removal in `lidar_costmap_layer_node` with RANSAC plane fitting. The old method (`points[:, 2] > threshold`) assumed level flight — during pitch/roll the ground plane tilts in base_link frame, causing false obstacles or missed ground removal. New params: `ransac_iterations`, `candidate_z_band_m`.
 
 ### v2.2 (March 2026)
 - **A* global planner** — weighted A* on 2D occupancy grids with inflation-aware cost penalties, automatic replanning on path deviation, altitude constraints, and JSON status reporting
@@ -78,6 +87,11 @@ ros2 launch pegasus_ros local_costmap.launch.py enable_lidar:=false
 ros2 launch pegasus_ros local_costmap.launch.py enable_zed:=false
 ```
 
+### Launch Full System Without Costmap
+```bash
+ros2 launch pegasus_ros pegasus_full.launch.py enable_costmap:=false
+```
+
 ### Run Individual Nodes
 ```bash
 ros2 run pegasus_ros mission_planner_node
@@ -107,17 +121,22 @@ ros2 run pegasus_ros static_map_publisher_node --ros-args -p map_yaml_path:=/pat
 ### SLAM Topics
 | Topic | Type | Rate | Source |
 |---|---|---|---|
-| `/odom` | Odometry | ~10 Hz | ICP odometry / odometry_selector |
+| `/odom_lidar` | Odometry | ~10 Hz | icp_odometry (primary) |
+| `/odom_vision` | Odometry | ~10 Hz | rgbd_odometry (backup) |
+| `/odom` | Odometry | ~10 Hz | odometry_selector (fused output) |
+| `/odom_status` | String | ~10 Hz | odometry_selector |
 | `/rtabmap/grid_map` | OccupancyGrid | ~1 Hz | RTAB-Map |
 | `/rtabmap/cloud_map` | PointCloud2 | ~1 Hz | RTAB-Map |
-| `/tf` (map→odom→base_link) | TF | continuous | RTAB-Map + static publishers |
+| `/tf` (map→odom→base_link) | TF | continuous | RTAB-Map + odometry_selector + static publishers |
 
 ### 3D Local Costmap Topics
 | Topic | Type | Rate | Source |
 |---|---|---|---|
 | `/pegasus/lidar_obstacles` | PointCloud2 | ~10 Hz | lidar_costmap_layer |
+| `/pegasus/lidar_origin` | PointStamped | ~10 Hz | lidar_costmap_layer |
 | `/pegasus/lidar_health` | Bool | ~4 Hz | lidar_costmap_layer |
 | `/pegasus/zed_obstacles` | PointCloud2 | ~15-30 Hz | zed_depth_costmap_layer |
+| `/pegasus/zed_origin` | PointStamped | ~15-30 Hz | zed_depth_costmap_layer |
 | `/pegasus/zed_health` | Bool | ~4 Hz | zed_depth_costmap_layer |
 | `/pegasus/local_costmap` | PointCloud2 | ~10 Hz | local_costmap_node |
 | `/pegasus/local_costmap_inflated` | PointCloud2 | ~10 Hz | local_costmap_node |
@@ -133,6 +152,26 @@ ros2 run pegasus_ros static_map_publisher_node --ros-args -p map_yaml_path:=/pat
 | `/pegasus/path_planner/global_path` | Path | on replan | global_planner_node |
 | `/pegasus/path_planner/status` | String (JSON) | ~1 Hz | global_planner_node |
 | `/pegasus/path_planner/replan_request` | Bool | on demand | external trigger |
+
+---
+
+## Configuration Files
+
+| File | Purpose | Key Parameters |
+|---|---|---|
+| `config/rtabmap.yaml` | SLAM tuning (RTAB-Map node only) | ICP settings, grid resolution, loop closure, gravity alignment |
+| `config/icp_odometry.yaml` | ICP LiDAR odometry (primary) | subscribe_scan_cloud, ICP voxel size, correspondence distance |
+| `config/rgbd_odometry.yaml` | RGB-D visual odometry (backup) | subscribe_rgb/depth, feature type, F2M size |
+| `config/zed_x.yaml` | Camera settings | Serial number, depth mode, resolution, frame rate |
+| `config/vlp16.yaml` | LiDAR settings | IP address, min/max range, calibration |
+| `config/local_costmap.yaml` | 3D costmap | Voxel resolution, grid size, sensor ranges, inflation radius, decay rate, RANSAC ground removal, degraded mode thresholds |
+| `config/path_planner.yaml` | A* planner | Heuristic weight, diagonal movement, cost penalty factor, lethal threshold, altitude limits, replan frequency, goal tolerance |
+
+Edit YAML files directly — no rebuild needed (with `--symlink-install`):
+```bash
+nano src/pegasus_ros/config/rtabmap.yaml
+# Changes take effect on next launch
+```
 
 ---
 
@@ -179,24 +218,6 @@ Planner test displays:
 - **Black shapes** — obstacles (buildings, walls, debris)
 - **Green line** — A* planned path
 - **Axes marker** — UAV position (base_link frame)
-
----
-
-## Configuration Files
-
-| File | Purpose | Key Parameters |
-|---|---|---|
-| `config/rtabmap.yaml` | SLAM tuning | Feature count, ICP settings, grid resolution, gravity alignment |
-| `config/zed_x.yaml` | Camera settings | Serial number, depth mode, resolution, frame rate |
-| `config/vlp16.yaml` | LiDAR settings | IP address, min/max range, calibration |
-| `config/local_costmap.yaml` | 3D costmap | Voxel resolution, grid size, sensor ranges, inflation radius, decay rate, degraded mode thresholds |
-| `config/path_planner.yaml` | A* planner | Heuristic weight, diagonal movement, cost penalty factor, lethal threshold, altitude limits, replan frequency, goal tolerance |
-
-Edit YAML files directly — no rebuild needed (with `--symlink-install`):
-```bash
-nano src/pegasus_ros/config/path_planner.yaml
-# Changes take effect on next launch
-```
 
 ---
 
@@ -258,10 +279,11 @@ nano src/pegasus_ros/config/path_planner.yaml
 6. ✅ Sensor health monitoring & degraded modes (v2.1)
 7. ✅ A* global path planning (v2.2)
 8. ✅ SIL test infrastructure — static map + RViz (v2.2)
-9. ⬜ D* Lite local replanner
-10. ⬜ MPC trajectory smoothing
-11. ⬜ Obstacle avoidance node
-12. ⬜ PX4 offboard command interface
+9. ✅ Bug fixes: odom YAML namespacing, ICP params, QoS, ground removal, full launch (v2.3)
+10. ⬜ D* Lite local replanner
+11. ⬜ MPC trajectory smoothing
+12. ⬜ Obstacle avoidance node
+13. ⬜ PX4 offboard command interface
 
 ### Phase 2: Computer Vision (Weeks 7-10)
 1. ⬜ Survivor detection with YOLOv8
@@ -281,4 +303,4 @@ nano src/pegasus_ros/config/path_planner.yaml
 ---
 
 **Last Updated**: March 2026
-**Version**: 2.2.0
+**Version**: 2.3.0

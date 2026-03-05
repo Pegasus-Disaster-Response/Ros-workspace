@@ -6,6 +6,15 @@ Subscribes to /velodyne_points, performs ground removal and height-band
 filtering, publishes obstacle voxels + sensor origin so the costmap node
 can raycast for free-space marking.
 
+v2.3 changes:
+  - Fix #7: Ground removal upgraded from naive z-threshold
+    (points_base[:, 2] > ground_height) to RANSAC plane fitting.
+    The old method assumed level flight — during pitch/roll maneuvers
+    the ground plane tilts relative to base_link, causing false
+    positives (ground classified as obstacle) or missed removal.
+    RANSAC fits the dominant plane in the lower portion of the cloud
+    and removes inliers regardless of UAV attitude.
+
 Publishes:
   /pegasus/lidar_obstacles  (PointCloud2 in base_link)
   /pegasus/lidar_origin     (PointStamped in base_link — sensor position)
@@ -92,6 +101,87 @@ def voxel_downsample(points: np.ndarray, voxel_size: float) -> np.ndarray:
     return points[unique_idx]
 
 
+def ransac_ground_removal(points: np.ndarray,
+                           distance_threshold: float = 0.3,
+                           n_iterations: int = 50,
+                           candidate_z_max: float = 0.5) -> np.ndarray:
+    """
+    Fix #7: RANSAC plane fitting for ground removal.
+
+    Instead of a naive z-threshold (which fails during pitch/roll),
+    this fits the dominant plane in the lower portion of the cloud.
+    Points within distance_threshold of the best-fit plane are
+    classified as ground and removed.
+
+    Steps:
+      1. Select candidate ground points (lowest z-values in base_link)
+      2. Run RANSAC on candidates to find the dominant plane
+      3. Remove all points within distance_threshold of that plane
+
+    Args:
+        points:              Nx3 points in base_link frame
+        distance_threshold:  max distance from plane to be considered ground
+        n_iterations:        RANSAC iterations
+        candidate_z_max:     only consider points below this z for plane fitting
+                             (relative to the cloud's min z)
+
+    Returns:
+        Nx3 obstacle points (ground removed)
+    """
+    if points.shape[0] < 10:
+        return points
+
+    # Step 1: Select candidate ground points (lowest portion of cloud)
+    z_min = np.percentile(points[:, 2], 5)
+    candidate_mask = points[:, 2] < (z_min + candidate_z_max)
+    candidates = points[candidate_mask]
+
+    if candidates.shape[0] < 3:
+        return points
+
+    # Step 2: RANSAC plane fitting on candidates
+    best_inlier_count = 0
+    best_normal = None
+    best_d = None
+    rng = np.random.default_rng(42)  # Deterministic for reproducibility
+
+    for _ in range(n_iterations):
+        # Pick 3 random points
+        idx = rng.choice(candidates.shape[0], 3, replace=False)
+        p1, p2, p3 = candidates[idx[0]], candidates[idx[1]], candidates[idx[2]]
+
+        # Compute plane normal via cross product
+        v1 = p2 - p1
+        v2 = p3 - p1
+        normal = np.cross(v1, v2)
+        norm_len = np.linalg.norm(normal)
+        if norm_len < 1e-8:
+            continue
+        normal = normal / norm_len
+
+        # Plane equation: normal · (p - p1) = 0  →  normal · p = d
+        d = np.dot(normal, p1)
+
+        # Count inliers among ALL points (not just candidates)
+        distances = np.abs(np.dot(points, normal) - d)
+        inlier_count = np.sum(distances < distance_threshold)
+
+        if inlier_count > best_inlier_count:
+            best_inlier_count = inlier_count
+            best_normal = normal
+            best_d = d
+
+    if best_normal is None:
+        # RANSAC failed — fall back to returning all points
+        return points
+
+    # Step 3: Remove ground inliers
+    distances = np.abs(np.dot(points, best_normal) - best_d)
+    obstacle_mask = distances >= distance_threshold
+
+    return points[obstacle_mask]
+
+
 # ── Node ─────────────────────────────────────────────────────────────
 
 class LidarCostmapLayerNode(Node):
@@ -108,6 +198,8 @@ class LidarCostmapLayerNode(Node):
         self.declare_parameter('lidar.voxel_size_m', 0.2)
         self.declare_parameter('lidar.ground_removal.enabled', True)
         self.declare_parameter('lidar.ground_removal.height_m', 0.3)
+        self.declare_parameter('lidar.ground_removal.ransac_iterations', 50)
+        self.declare_parameter('lidar.ground_removal.candidate_z_band_m', 0.5)
         self.declare_parameter('lidar.height_band.min_m', -2.0)
         self.declare_parameter('lidar.height_band.max_m', 15.0)
         self.declare_parameter('lidar.min_points_for_obstacle', 3)
@@ -119,7 +211,9 @@ class LidarCostmapLayerNode(Node):
         self.range_max = self.get_parameter('lidar.range_max_m').value
         self.voxel_size = self.get_parameter('lidar.voxel_size_m').value
         self.ground_enabled = self.get_parameter('lidar.ground_removal.enabled').value
-        self.ground_height = self.get_parameter('lidar.ground_removal.height_m').value
+        self.ground_dist_thresh = self.get_parameter('lidar.ground_removal.height_m').value
+        self.ransac_iters = self.get_parameter('lidar.ground_removal.ransac_iterations').value
+        self.candidate_z_band = self.get_parameter('lidar.ground_removal.candidate_z_band_m').value
         self.height_min = self.get_parameter('lidar.height_band.min_m').value
         self.height_max = self.get_parameter('lidar.height_band.max_m').value
         self.min_pts = self.get_parameter('lidar.min_points_for_obstacle').value
@@ -148,8 +242,10 @@ class LidarCostmapLayerNode(Node):
         self.lock = threading.Lock()
         self.health_timer = self.create_timer(0.25, self.publish_health)
 
+        ground_method = 'RANSAC' if self.ground_enabled else 'disabled'
         self.get_logger().info(
-            f'LiDAR costmap layer v2 — subscribing to {self.lidar_topic}')
+            f'LiDAR costmap layer v2.3 — subscribing to {self.lidar_topic} '
+            f'(ground removal: {ground_method})')
 
     def get_transform_to_base(self, source_frame, stamp):
         """Look up 4x4 homogeneous transform source_frame → base_link."""
@@ -219,9 +315,14 @@ class LidarCostmapLayerNode(Node):
         # Voxel downsample
         points_base = voxel_downsample(points_base, self.voxel_size)
 
-        # Ground removal
+        # Ground removal — Fix #7: RANSAC instead of naive z-threshold
         if self.ground_enabled:
-            points_base = points_base[points_base[:, 2] > self.ground_height]
+            points_base = ransac_ground_removal(
+                points_base,
+                distance_threshold=self.ground_dist_thresh,
+                n_iterations=self.ransac_iters,
+                candidate_z_max=self.candidate_z_band,
+            )
         if points_base.shape[0] == 0:
             return
 

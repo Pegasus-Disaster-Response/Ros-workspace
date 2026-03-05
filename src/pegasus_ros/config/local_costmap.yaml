@@ -1,9 +1,12 @@
 # ============================================================
-#  Pegasus 3D Local Costmap Configuration (v2)
+#  Pegasus 3D Local Costmap Configuration (v2.3)
 #  Fuses VLP-16 LiDAR + ZED X depth into a rolling 3D voxel grid
 #
-#  v2 additions: raycasting, speed-adaptive decay, inflation
-#  publishing, costmap metadata
+#  v2.3 changes:
+#    - Fix #7: Added RANSAC ground removal parameters
+#      (ransac_iterations, candidate_z_band_m). The height_m
+#      parameter is now used as the RANSAC distance threshold
+#      instead of a naive z-threshold.
 # ============================================================
 
 local_costmap_node:
@@ -11,11 +14,11 @@ local_costmap_node:
 
     # ── Voxel Grid Geometry ────────────────────────────
     costmap:
-      size_x_m: 40.0                  # total X dimension of the grid
-      size_y_m: 40.0                  # total Y dimension
-      size_z_m: 20.0                  # vertical extent (important for UAV)
-      resolution_m: 0.3               # voxel edge length (0.3m = good tradeoff)
-      origin_frame: "base_link"       # costmap centered on this frame
+      size_x_m: 40.0
+      size_y_m: 40.0
+      size_z_m: 20.0
+      resolution_m: 0.3
+      origin_frame: "base_link"
 
     # ── LiDAR Costmap Layer ────────────────────────────
     lidar:
@@ -28,7 +31,9 @@ local_costmap_node:
       voxel_size_m: 0.2
       ground_removal:
         enabled: true
-        height_m: 0.3
+        height_m: 0.3                # RANSAC distance threshold (m)
+        ransac_iterations: 50        # Fix #7: RANSAC iteration count
+        candidate_z_band_m: 0.5      # Fix #7: z-band above cloud minimum for plane candidates
       height_band:
         min_m: -2.0
         max_m: 15.0
@@ -51,23 +56,18 @@ local_costmap_node:
 
     # ── Fusion & Decay ─────────────────────────────────
     fusion:
-      obstacle_persistence_s: 2.0     # base decay time at rest
-      decay_check_hz: 2.0             # how often to sweep stale voxels
-      max_ghost_distance_m: 3.0       # at speed, ghosts clear within this distance
-                                       # persistence = max_ghost_distance / speed
-                                       # at 20 m/s → 0.15s, at 5 m/s → 0.6s
-      raycasting_enabled: true         # mark voxels along sensor rays as FREE
-                                       # set false to save CPU if not needed
+      obstacle_persistence_s: 2.0
+      decay_check_hz: 2.0
+      max_ghost_distance_m: 3.0
+      raycasting_enabled: true
       unknown_cost: -1
       free_cost: 0
       occupied_cost: 100
 
     # ── Inflation ──────────────────────────────────────
     inflation:
-      radius_m: 3.0                   # safety buffer around obstacles
-                                       # should be >= half wingspan (15ft/2 ≈ 2.3m)
-      cost_scaling_factor: 5.0        # exponential dropoff steepness
-                                       # higher = sharper dropoff, tighter paths
+      radius_m: 3.0                  # >= half wingspan (15ft/2 ≈ 2.3m)
+      cost_scaling_factor: 5.0
 
     # ── Sensor Health / Degraded Modes ─────────────────
     degraded_modes:
@@ -91,5 +91,5 @@ local_costmap_node:
       marker_topic: "/pegasus/local_costmap_markers"
       publish_2d_projection: true
       projection_topic: "/pegasus/local_costmap_2d"
-      projection_height_m: 0.0        # slice at base_link height
+      projection_height_m: 0.0
       metadata_topic: "/pegasus/costmap_metadata"

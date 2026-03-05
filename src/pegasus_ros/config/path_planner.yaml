@@ -4,51 +4,38 @@
 #  Algorithm: Weighted A* on 2D occupancy grids
 #  Architecture: A* (global) → D* Lite (local) → MPC (smooth)
 #
-#  This node handles only the first layer — initial global path.
-#  D* Lite and MPC are separate nodes (to be implemented).
+#  v2.3.1 changes:
+#    - cost_penalty_factor: 5.0 → 15.0 (paths were cutting too close
+#      to obstacles; higher value pushes paths further from inflation zones)
+#    - unknown_cell_cost: 50 → 70 (more conservative in unknown areas)
 # ============================================================
 
 global_planner_node:
   ros__parameters:
 
     # ── A* Algorithm Tuning ──────────────────────────────
-    heuristic_weight: 1.0             # 1.0 = optimal (Dijkstra-like guarantee)
-                                       # 1.2–1.5 = faster, slightly suboptimal
-                                       # 2.0+ = greedy, fast but can miss better paths
-    diagonal_movement: true            # 8-connected (true) vs 4-connected (false)
-    max_iterations: 50000              # hard cap on node expansions to prevent hangs
-    cost_penalty_factor: 5.0           # multiplier for traversing inflation-zone cells
-                                       # higher = paths avoid obstacles more aggressively
-                                       # lower = paths cut closer to obstacles
+    heuristic_weight: 1.2             # slightly greedy for faster planning
+    diagonal_movement: true            # 8-connected
+    max_iterations: 100000             # increased for denser maps
+    cost_penalty_factor: 15.0          # INCREASED from 5.0 — pushes paths away from obstacles
+                                       # with dense obstacles, 5.0 was letting paths graze walls
     lethal_cost_threshold: 90          # cells >= this value are impassable
-    unknown_cell_cost: 50              # penalty for traversing unknown cells (0–100)
-                                       # 0 = treat unknown as free (optimistic)
-                                       # 100 = treat unknown as lethal (conservative)
+    unknown_cell_cost: 70              # more conservative in unknown areas
 
     # ── Goal Tolerance ───────────────────────────────────
-    goal_tolerance_m: 2.0              # 3D distance to goal considered "arrived"
+    goal_tolerance_m: 2.0
 
     # ── Replanning ───────────────────────────────────────
-    replan_frequency_hz: 1.0           # how often to check if replan is needed
-    path_deviation_threshold_m: 5.0    # trigger replan if UAV drifts this far from path
+    replan_frequency_hz: 1.0
+    path_deviation_threshold_m: 5.0
 
     # ── UAV Flight Constraints ───────────────────────────
-    min_altitude_m: 5.0                # floor altitude AGL (above ground level)
-    max_altitude_m: 120.0              # FAA Part 107 ceiling
-    min_clearance_m: 3.0               # minimum distance from obstacles
+    min_altitude_m: 5.0
+    max_altitude_m: 120.0
+    min_clearance_m: 3.0
 
     # ── Grid Selection ───────────────────────────────────
-    prefer_local_costmap: true         # true:  use /pegasus/local_costmap_2d first
-                                       #        (real-time, immediate obstacles)
-                                       # false: use /rtabmap/grid_map first
-                                       #        (larger map, loop-closure corrected)
-                                       # Falls back to whichever is available if
-                                       # the preferred one is not publishing.
-                                       #
-                                       # Early in a mission (first-time flight), the
-                                       # SLAM grid is sparse. The local costmap gives
-                                       # the planner something to work with immediately.
+    prefer_local_costmap: true
 
     # ── Debug / Visualization ────────────────────────────
-    publish_visited_grid: false         # publish the A* visited-cells grid
-                                       # (expensive — only enable for debugging)
+    publish_visited_grid: false

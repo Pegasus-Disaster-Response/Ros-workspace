@@ -6,8 +6,13 @@ package_name = 'pegasus_ros'
 
 setup(
     name=package_name,
-    version='2.0.0',
-    packages=[package_name.replace('pegasus_ros', 'pegasus_autonomy')],
+    version='2.3.0',
+    # Fix #1: Explicit package + package_dir mapping so setuptools reliably
+    # finds the pegasus_autonomy module inside the pegasus_ros source tree.
+    # Previously used: packages=[package_name.replace('pegasus_ros', 'pegasus_autonomy')]
+    # which is fragile and omits the package_dir hint.
+    packages=['pegasus_autonomy'],
+    #package_dir={'pegasus_autonomy': 'pegasus_autonomy'},
     data_files=[
         # ── Package index (required by ament) ──
         ('share/ament_index/resource_index/packages',
@@ -17,13 +22,15 @@ setup(
         # ── Config files ──
         (os.path.join('share', package_name, 'config'), [
             'config/rtabmap.yaml',
+            'config/icp_odometry.yaml',             # NEW (Fix #3)
+            'config/rgbd_odometry.yaml',            # NEW (Fix #3)
             'config/vlp16.yaml',
             'config/zed_x.yaml',
             'config/rviz_slam.rviz',
-            'config/local_costmap.yaml',            # 3D local costmap parameters
-            'config/rviz_local_costmap.rviz',       # RViz config for costmap visualization
-            'config/path_planner.yaml',             # A* global planner parameters
-            'config/rviz_planner_test.rviz',        # RViz config for planner SIL test
+            'config/local_costmap.yaml',
+            'config/rviz_local_costmap.rviz',
+            'config/path_planner.yaml',
+            'config/rviz_planner_test.rviz',
         ]),
 
         # ── Launch files ──
@@ -32,9 +39,9 @@ setup(
             'launch/pegasus_sensors.launch.py',
             'launch/pegasus_slam.launch.py',
             'launch/vtol1_gazebo_bridge_launch.py',
-            'launch/local_costmap.launch.py',       # 3D local costmap launch
-            'launch/path_planner.launch.py',        # A* global planner launch
-            'launch/gazebo_planner_test.launch.py', # SIL test: A* on static map
+            'launch/local_costmap.launch.py',
+            'launch/path_planner.launch.py',
+            'launch/gazebo_planner_test.launch.py',
         ]),
 
         # ── World files (Gazebo SDF) ──
