@@ -262,7 +262,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_velodyne',
         arguments=[
-            '0.52', '0.0', '0.85',     # x, y, z (meters) — UPDATE THESE
+            '0.0', '0.0', '0.15',     # vtol1 SDF: velodyne at z=0.15 above base_link
             '0', '0', '0',
             'base_link', 'velodyne'
         ],
@@ -273,9 +273,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
-            '1.78', '0.0', '0.55',      # x, y, z (meters) — UPDATE THESE
+            '0.12', '0.03', '0.242',      # vtol1 SDF: camera at (0.12, 0.03, 0.242)
             '0', '0', '0',
-            'base_link', 'zed_x_camera_center'
+            'base_link', 'camera_link'
         ],
     )
 

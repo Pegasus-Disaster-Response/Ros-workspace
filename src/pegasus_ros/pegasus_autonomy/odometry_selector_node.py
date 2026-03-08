@@ -5,16 +5,21 @@ Odometry Selector Node - Fault-Tolerant Odometry for RTAB-Map SLAM
 Intelligently switches between LiDAR ICP odometry (primary) and
 Visual RGB-D odometry (backup) based on sensor availability.
 
-v2.3 changes:
-  - Fix #2: Replaced time.time() (wall clock) with self.get_clock()
-    (ROS clock). When use_sim_time=true, time.time() does NOT track
-    simulation time, so the timeout logic would break — both sources
-    would appear alive forever or dead forever depending on timing.
+v2.4 changes:
+  - Fix: NEVER publish NaN quaternions to TF. When both odometry
+    sources fail, hold the last known good transform instead of
+    publishing NaN, which was poisoning the entire TF tree and
+    blocking SLAM from processing any data.
+  - Fix: Validate quaternion before broadcasting to TF.
+  - Added initial identity transform on startup so TF tree is
+    valid from the first frame (prevents "frame does not exist"
+    errors during odometry initialization).
 
 Author: Team Pegasus
 Date: 2026
 """
 
+import math
 import rclpy
 from rclpy.node import Node
 from nav_msgs.msg import Odometry
@@ -44,7 +49,6 @@ class OdometrySelector(Node):
         self.declare_parameter('primary_odom_topic', '/odom_lidar')
         self.declare_parameter('backup_odom_topic', '/odom_vision')
         self.declare_parameter('timeout_threshold', 0.5)  # seconds
-        self.declare_parameter('use_sim_time', False)
 
         primary_topic = self.get_parameter('primary_odom_topic').value
         backup_topic = self.get_parameter('backup_odom_topic').value
@@ -70,63 +74,110 @@ class OdometrySelector(Node):
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # ── State ────────────────────────────────────────────────
-        # Fix #2: timestamps now use ROS clock seconds
         self.last_primary_time = 0.0
         self.last_backup_time = 0.0
         self.current_mode = 'NONE'
         self.last_primary_msg = None
         self.last_backup_msg = None
 
+        # Last known good transform — initialized to identity
+        # so TF tree is valid from startup
+        self.last_good_transform = TransformStamped()
+        self.last_good_transform.header.frame_id = 'odom'
+        self.last_good_transform.child_frame_id = 'base_link'
+        self.last_good_transform.transform.rotation.w = 1.0  # identity quaternion
+        self.has_good_transform = False
+
         # Statistics
         self.primary_count = 0
         self.backup_count = 0
         self.failure_count = 0
+        self.hold_count = 0
 
         # ── Health Monitor Timer ─────────────────────────────────
         self.create_timer(0.1, self.health_check)
 
+        # Publish identity TF immediately so the tree is valid
+        self._publish_held_transform()
+
         self.get_logger().info('═══════════════════════════════════════════════')
-        self.get_logger().info('  Odometry Selector Node Initialized')
+        self.get_logger().info('  Odometry Selector Node v2.4 Initialized')
         self.get_logger().info(f'  Primary: {primary_topic}')
         self.get_logger().info(f'  Backup:  {backup_topic}')
         self.get_logger().info(f'  Timeout: {self.timeout}s')
+        self.get_logger().info('  NaN protection: ENABLED')
         self.get_logger().info('═══════════════════════════════════════════════')
 
     def _now_sec(self) -> float:
         """Return current ROS time in seconds (respects use_sim_time)."""
         return self.get_clock().now().nanoseconds / 1e9
 
+    @staticmethod
+    def _is_valid_quaternion(q) -> bool:
+        """Check quaternion is not NaN and is approximately normalized."""
+        vals = [q.x, q.y, q.z, q.w]
+        if any(math.isnan(v) or math.isinf(v) for v in vals):
+            return False
+        norm = math.sqrt(sum(v * v for v in vals))
+        return 0.9 < norm < 1.1  # allow small numerical drift
+
+    @staticmethod
+    def _is_valid_position(p) -> bool:
+        """Check position is not NaN or Inf."""
+        vals = [p.x, p.y, p.z]
+        return not any(math.isnan(v) or math.isinf(v) for v in vals)
+
+    def _is_valid_odometry(self, odom_msg) -> bool:
+        """Validate an odometry message has non-NaN pose."""
+        if odom_msg is None:
+            return False
+        return (self._is_valid_position(odom_msg.pose.pose.position) and
+                self._is_valid_quaternion(odom_msg.pose.pose.orientation))
+
     def primary_callback(self, msg):
         """Receive LiDAR ICP odometry"""
-        self.last_primary_msg = msg
-        self.last_primary_time = self._now_sec()
+        if self._is_valid_odometry(msg):
+            self.last_primary_msg = msg
+            self.last_primary_time = self._now_sec()
+        else:
+            self.get_logger().warning(
+                'Rejected PRIMARY odometry: invalid pose (NaN/Inf)',
+                throttle_duration_sec=5.0
+            )
 
     def backup_callback(self, msg):
         """Receive Visual RGB-D odometry"""
-        self.last_backup_msg = msg
-        self.last_backup_time = self._now_sec()
+        if self._is_valid_odometry(msg):
+            self.last_backup_msg = msg
+            self.last_backup_time = self._now_sec()
+        else:
+            self.get_logger().warning(
+                'Rejected BACKUP odometry: invalid pose (NaN/Inf)',
+                throttle_duration_sec=5.0
+            )
 
     def health_check(self):
         """
         Main decision logic - runs at 10 Hz
-        Selects best available odometry source and publishes
+        Selects best available odometry source and publishes.
+        NEVER publishes NaN — holds last good transform on failure.
         """
         now = self._now_sec()
 
         primary_alive = (now - self.last_primary_time) < self.timeout
         backup_alive = (now - self.last_backup_time) < self.timeout
 
-        if primary_alive:
+        if primary_alive and self._is_valid_odometry(self.last_primary_msg):
             if self.current_mode != 'PRIMARY':
                 self.get_logger().info(
                     'USING PRIMARY ODOMETRY (LiDAR ICP) - '
-                    f'Range: 100m, Coverage: 360°'
+                    'Range: 100m, Coverage: 360°'
                 )
                 self.current_mode = 'PRIMARY'
             self.publish_odometry(self.last_primary_msg, 'PRIMARY_LIDAR')
             self.primary_count += 1
 
-        elif backup_alive:
+        elif backup_alive and self._is_valid_odometry(self.last_backup_msg):
             if self.current_mode != 'BACKUP':
                 self.get_logger().warning(
                     '    PRIMARY ODOMETRY FAILED - SWITCHING TO BACKUP (Visual RGB-D)\n'
@@ -137,16 +188,18 @@ class OdometrySelector(Node):
             self.backup_count += 1
 
         else:
+            # CRITICAL FIX: Never publish NaN. Hold last good transform.
             if self.current_mode != 'FAILED':
                 self.get_logger().error(
-                    '   CRITICAL: ALL ODOMETRY SOURCES FAILED!\n'
-                    '   - LiDAR ICP: No data\n'
-                    '   - Visual RGB-D: No data\n'
-                    '   RTAB-Map SLAM will degrade or fail!'
+                    '   ALL ODOMETRY SOURCES UNAVAILABLE\n'
+                    '   Holding last known good transform\n'
+                    '   SLAM may stall until odometry recovers'
                 )
                 self.current_mode = 'FAILED'
-            self.publish_status('FAILED')
+            self._publish_held_transform()
+            self.publish_status('HOLDING')
             self.failure_count += 1
+            self.hold_count += 1
             if self.failure_count % 50 == 0:
                 self.log_statistics()
 
@@ -163,6 +216,16 @@ class OdometrySelector(Node):
         self.status_pub.publish(msg)
 
     def broadcast_tf(self, odom_msg):
+        """Broadcast odom→base_link TF with NaN validation."""
+        # Double-check: never broadcast invalid data
+        if not self._is_valid_odometry(odom_msg):
+            self.get_logger().warning(
+                'Blocked NaN TF broadcast',
+                throttle_duration_sec=2.0
+            )
+            self._publish_held_transform()
+            return
+
         t = TransformStamped()
         t.header.stamp = odom_msg.header.stamp
         t.header.frame_id = 'odom'
@@ -171,6 +234,19 @@ class OdometrySelector(Node):
         t.transform.translation.y = odom_msg.pose.pose.position.y
         t.transform.translation.z = odom_msg.pose.pose.position.z
         t.transform.rotation = odom_msg.pose.pose.orientation
+        self.tf_broadcaster.sendTransform(t)
+
+        # Save as last known good
+        self.last_good_transform = t
+        self.has_good_transform = True
+
+    def _publish_held_transform(self):
+        """Publish the last known good transform with current timestamp."""
+        t = TransformStamped()
+        t.header.stamp = self.get_clock().now().to_msg()
+        t.header.frame_id = 'odom'
+        t.child_frame_id = 'base_link'
+        t.transform = self.last_good_transform.transform
         self.tf_broadcaster.sendTransform(t)
 
     def log_statistics(self):
@@ -186,6 +262,7 @@ class OdometrySelector(Node):
             f'  Odometry Statistics (last {total} updates):\n'
             f'  ├─ Primary (LiDAR):  {primary_pct:.1f}%\n'
             f'  ├─ Backup (Vision):  {backup_pct:.1f}%\n'
+            f'  ├─ Holding (last good): {self.hold_count}\n'
             f'  └─ Failures:         {failure_pct:.1f}%\n'
             f'═══════════════════════════════════════════════'
         )
@@ -201,7 +278,10 @@ def main(args=None):
         node.log_statistics()
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

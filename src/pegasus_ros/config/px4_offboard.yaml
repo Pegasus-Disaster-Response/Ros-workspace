@@ -1,0 +1,28 @@
+# ============================================================
+#  Pegasus PX4 Offboard Interface Configuration
+#
+#  Bridges MPC trajectory setpoints to PX4 via XRCE-DDS.
+#  This is the same node for both real flight and SITL.
+# ============================================================
+
+px4_offboard_node:
+  ros__parameters:
+
+    # ── Heartbeat ────────────────────────────────────────
+    offboard_heartbeat_hz: 50.0       # OffboardControlMode publish rate
+                                       # PX4 requires >2 Hz, we send 50 Hz
+                                       # to match the MPC setpoint rate
+
+    # ── Safety ───────────────────────────────────────────
+    setpoint_timeout_s: 0.5           # If MPC stops publishing for this long,
+                                       # stop sending trajectory commands.
+                                       # PX4 will revert to HOLD mode.
+
+    # ── Auto-engage (for SITL testing only!) ─────────────
+    # WARNING: In real flight, NEVER set these to true.
+    # Use the manual arm/engage topics or QGroundControl instead.
+    auto_engage: false                # Auto-switch to offboard mode
+    auto_arm: false                   # Auto-arm the vehicle
+
+    # ── Default altitude ─────────────────────────────────
+    default_altitude_ned_m: -10.0     # NED (negative = up) — used if no setpoint

@@ -42,6 +42,7 @@ setup(
             'launch/local_costmap.launch.py',
             'launch/path_planner.launch.py',
             'launch/gazebo_planner_test.launch.py',
+            'launch/p110_gazebo_bridge_launch.py',
         ]),
 
         # ── World files (Gazebo SDF) ──

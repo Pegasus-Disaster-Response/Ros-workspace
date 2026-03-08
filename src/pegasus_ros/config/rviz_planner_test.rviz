@@ -15,7 +15,7 @@ Visualization Manager:
       Cell Size: 1
       Color: 80; 80; 80
       Line Style:
-        Value: Lines
+        Value: Lines 
       Plane Cell Count: 200
 
     - Class: rviz_default_plugins/TF

@@ -1,0 +1,29 @@
+# ============================================================
+#  Pegasus D* Lite Local Replanner Configuration
+#
+#  Incrementally replans the local path when the costmap changes.
+#  Runs at costmap update rate, repairs only the affected portion
+#  of the search graph instead of recomputing from scratch.
+# ============================================================
+
+dstar_lite_node:
+  ros__parameters:
+
+    # ── Update Rate ──────────────────────────────────────
+    update_rate_hz: 5.0               # How often to check for costmap changes
+                                       # Higher = more responsive, more CPU
+                                       # 5–10 Hz is typical for UAV
+
+    # ── Cost Parameters ──────────────────────────────────
+    lethal_cost_threshold: 90          # Cells >= this are impassable
+    cost_penalty_factor: 15.0          # Penalty for inflation-zone cells
+                                       # Match this to the A* planner value
+
+    # ── Path Simplification ──────────────────────────────
+    path_simplification: true          # Reduce waypoint count via RDP
+    simplification_tolerance_m: 0.5    # RDP tolerance in meters
+                                       # Higher = fewer waypoints, less precise
+
+    # ── Altitude Constraints ─────────────────────────────
+    min_altitude_m: 5.0
+    max_altitude_m: 120.0
