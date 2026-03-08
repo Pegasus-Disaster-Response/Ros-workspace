@@ -4,7 +4,7 @@
   <name>pegasus_ros</name>
   <version>2.0.0</version>
   <description>Pegasus Disaster Response UAV Autonomy Package</description>
-  <maintainer email="changwe@calpoly.edu">Team Pegasus - Cal Poly Pomona</maintainer>
+  <maintainer email="cbmusonda@cpp.edu">Team Pegasus - Cal Poly Pomona</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
@@ -39,6 +39,10 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>tf2_geometry_msgs</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
+
+  <!-- Python libraries (3D costmap inflation uses scipy.ndimage) -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
 
   <!-- Visualization -->
   <exec_depend>rviz2</exec_depend>

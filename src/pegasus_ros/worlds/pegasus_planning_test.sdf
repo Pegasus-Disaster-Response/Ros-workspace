@@ -1,0 +1,206 @@
+<?xml version="1.0" ?>
+<!--
+  Pegasus Path Planning Test World
+  A simple obstacle environment for SIL testing of the A* global planner.
+
+  Environment: 100m x 100m flat ground with buildings, walls, and debris
+  representing a disaster response scenario.
+
+  Launch Gazebo with:
+    gz sim pegasus_planning_test.sdf
+-->
+<sdf version="1.9">
+  <world name="pegasus_planning_test">
+
+    <!-- Physics -->
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <!-- Plugins -->
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <!-- Lighting -->
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 50 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- Ground Plane -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+        </collision>
+        <visual name="visual">
+          <geometry>
+            <plane><normal>0 0 1</normal><size>200 200</size></plane>
+          </geometry>
+          <material>
+            <ambient>0.5 0.5 0.45 1</ambient>
+            <diffuse>0.5 0.5 0.45 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ════════════════════════════════════════════════════
+         BUILDINGS — large rectangular obstacles
+         ════════════════════════════════════════════════════ -->
+
+    <!-- Building A: large warehouse (center-left) -->
+    <model name="building_a">
+      <static>true</static>
+      <pose>-15 10 5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>12 8 10</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>12 8 10</size></box></geometry>
+          <material><ambient>0.6 0.4 0.3 1</ambient><diffuse>0.6 0.4 0.3 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Building B: office tower (right side) -->
+    <model name="building_b">
+      <static>true</static>
+      <pose>20 -5 7.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>6 10 15</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>6 10 15</size></box></geometry>
+          <material><ambient>0.5 0.5 0.6 1</ambient><diffuse>0.5 0.5 0.6 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Building C: collapsed structure (far end) -->
+    <model name="building_c">
+      <static>true</static>
+      <pose>35 25 3 0 0 0.3</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>10 6 6</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>10 6 6</size></box></geometry>
+          <material><ambient>0.7 0.5 0.4 1</ambient><diffuse>0.7 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ════════════════════════════════════════════════════
+         WALLS — long thin obstacles to force routing
+         ════════════════════════════════════════════════════ -->
+
+    <!-- Wall 1: north-south barrier forcing a detour -->
+    <model name="wall_1">
+      <static>true</static>
+      <pose>5 0 2.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>1 20 5</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>1 20 5</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Wall 2: east-west barrier with a gap -->
+    <model name="wall_2a">
+      <static>true</static>
+      <pose>-5 -15 2.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>15 1 5</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>15 1 5</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall_2b">
+      <static>true</static>
+      <pose>15 -15 2.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>10 1 5</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>10 1 5</size></box></geometry>
+          <material><ambient>0.7 0.7 0.7 1</ambient><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- ════════════════════════════════════════════════════
+         DEBRIS — scattered smaller obstacles
+         ════════════════════════════════════════════════════ -->
+
+    <model name="debris_1">
+      <static>true</static>
+      <pose>-25 -8 1 0 0 0.5</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>4 3 2</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>4 3 2</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.55 0.45 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="debris_2">
+      <static>true</static>
+      <pose>10 20 1.5 0 0.2 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>3 5 3</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>3 5 3</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.55 0.45 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="debris_3">
+      <static>true</static>
+      <pose>-10 -25 1 0 0 1.2</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>5 2 2</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>5 2 2</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.55 0.45 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="debris_4">
+      <static>true</static>
+      <pose>28 10 1 0 0 0.8</pose>
+      <link name="link">
+        <collision name="col"><geometry><box><size>3 3 2</size></box></geometry></collision>
+        <visual name="vis"><geometry><box><size>3 3 2</size></box></geometry>
+          <material><ambient>0.55 0.45 0.35 1</ambient><diffuse>0.55 0.45 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Cylindrical rubble -->
+    <model name="rubble_1">
+      <static>true</static>
+      <pose>-20 20 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>2</radius><length>3</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>2</radius><length>3</length></cylinder></geometry>
+          <material><ambient>0.5 0.5 0.4 1</ambient><diffuse>0.5 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="rubble_2">
+      <static>true</static>
+      <pose>25 -20 1 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>1.5</radius><length>2</length></cylinder></geometry></collision>
+        <visual name="vis"><geometry><cylinder><radius>1.5</radius><length>2</length></cylinder></geometry>
+          <material><ambient>0.5 0.5 0.4 1</ambient><diffuse>0.5 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+  </world>
+</sdf>

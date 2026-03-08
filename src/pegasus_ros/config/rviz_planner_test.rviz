@@ -1,0 +1,85 @@
+Panels:
+  - Class: rviz_common/Displays
+  - Class: rviz_common/Views
+  - Class: rviz_common/Time
+    Experimental: false
+    SyncMode: 0
+    SyncSource: ""
+
+Visualization Manager:
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Reference Frame: map
+      Cell Count: 200
+      Cell Size: 1
+      Color: 80; 80; 80
+      Line Style:
+        Value: Lines
+      Plane Cell Count: 200
+
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Show Names: true
+      Show Arrows: true
+      Show Axes: true
+
+    - Class: rviz_default_plugins/Map
+      Name: Static Map
+      Topic:
+        Value: /rtabmap/grid_map
+        Depth: 1
+        Reliability: Reliable
+        Durability: Transient Local
+      Alpha: 0.8
+      Color Scheme: map
+      Draw Behind: true
+
+    - Class: rviz_default_plugins/Path
+      Name: A* Global Path
+      Topic:
+        Value: /pegasus/path_planner/global_path
+        Depth: 5
+        Reliability: Reliable
+      Color: 255; 50; 255
+      Alpha: 1.0
+      Line Style: Billboards
+      Line Width: 0.3
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0.5
+      Pose Style: None
+
+    - Class: rviz_default_plugins/Axes
+      Name: UAV Position
+      Reference Frame: base_link
+      Length: 2.0
+      Radius: 0.3
+
+  Global Options:
+    Background Color: 30; 30; 30
+    Fixed Frame: map
+    Frame Rate: 30
+
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+    - Class: rviz_default_plugins/SetInitialPose
+      Topic:
+        Value: /initialpose
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /pegasus/autonomy/target_waypoint
+
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: TopDown
+      Near Clip Distance: 0.01
+      Scale: 10
+      Target Frame: map
+      X: 0
+      Y: 0

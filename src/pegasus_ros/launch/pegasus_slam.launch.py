@@ -3,13 +3,13 @@
 Pegasus RTAB-Map SLAM Launch File
 Multi-sensor SLAM: ZED X (RGB-D) + VLP-16 LiDAR + Pixhawk IMU
 
-Changes from v1.0:
-  - Switched to RGB-D mode (uses ZED X neural depth instead of stereo matching)
-  - Added ICP LiDAR odometry as primary odometry source
-  - Parameters loaded from YAML configs instead of inline dicts
-  - Added static TF publishers for all sensors
-  - IMU now received from px4_imu_bridge_node (/pegasus/imu/data)
-  - Added Mem/UseOdomGravity for gravity-aligned maps
+v2.3 changes:
+  - Fix #3: ICP and RGB-D odometry nodes now load their own dedicated
+    YAML configs (icp_odometry.yaml, rgbd_odometry.yaml) so subscription
+    params (subscribe_scan_cloud, subscribe_rgb, etc.) are under the
+    correct node name and actually take effect. Previously both loaded
+    rtabmap.yaml whose params are keyed under 'rtabmap:' — a namespace
+    that doesn't match either odometry node name.
 
 Author: Team Pegasus
 Date: 2026
@@ -59,18 +59,25 @@ def generate_launch_description():
     rviz = LaunchConfiguration('rviz')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    # ── Config file path ─────────────────────────────────────
+    # ── Config file paths ────────────────────────────────────
+    # Fix #3: Each node type gets its own config with params under
+    # the matching YAML key (node name).
     rtabmap_config = PathJoinSubstitution([
         pegasus_share, 'config', 'rtabmap.yaml'
     ])
+    icp_odom_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'icp_odometry.yaml'
+    ])
+    rgbd_odom_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'rgbd_odometry.yaml'
+    ])
 
     # ── Topic Names ──────────────────────────────────────────
-    # RGB-D topics from ZED X (using neural depth)
     rgb_image_topic = '/zed_x/zed_node/rgb/image_rect_color'
     rgb_camera_info_topic = '/zed_x/zed_node/rgb/camera_info'
     depth_image_topic = '/zed_x/zed_node/depth/depth_registered'
     scan_cloud_topic = '/velodyne_points'
-    imu_topic = '/pegasus/imu/data'   # From px4_imu_bridge_node
+    imu_topic = '/pegasus/imu/data'
 
     # ── Frame IDs ────────────────────────────────────────────
     frame_id = 'base_link'
@@ -86,25 +93,65 @@ def generate_launch_description():
         name='icp_odometry',
         output='screen',
         parameters=[
-            rtabmap_config,
+            icp_odom_config,            # Fix #3: dedicated config
             {
                 'frame_id': frame_id,
-                'odom_frame_id': odom_frame_id,
-                'publish_tf': True,
+                'odom_frame_id': 'odom_lidar',
+                'publish_tf': False,    # Selector node handles TF
                 'use_sim_time': use_sim_time,
-                'Icp/MaxTranslation': '1.0',
-                'Odom/Strategy': '0',
             },
         ],
         remappings=[
             ('scan_cloud', scan_cloud_topic),
-            ('odom', '/odom'),
+            ('odom', '/odom_lidar'),
             ('imu', imu_topic),
         ],
     )
 
     # ══════════════════════════════════════════════════════════
-    # 2. RTAB-Map SLAM Node (Mapping Mode)
+    # 2. RGB-D Visual Odometry (backup odometry source)
+    # ══════════════════════════════════════════════════════════
+    rgbd_odometry = Node(
+        package='rtabmap_odom',
+        executable='rgbd_odometry',
+        name='rgbd_odometry',
+        output='screen',
+        parameters=[
+            rgbd_odom_config,           # Fix #3: dedicated config
+            {
+                'frame_id': frame_id,
+                'odom_frame_id': 'odom_vision',
+                'publish_tf': False,    # Selector node handles TF
+                'use_sim_time': use_sim_time,
+            },
+        ],
+        remappings=[
+            ('rgb/image', rgb_image_topic),
+            ('rgb/camera_info', rgb_camera_info_topic),
+            ('depth/image', depth_image_topic),
+            ('odom', '/odom_vision'),
+            ('imu', imu_topic),
+        ],
+    )
+
+    # ══════════════════════════════════════════════════════════
+    # 3. Odometry Fusion/Selector (fault-tolerant switching)
+    # ══════════════════════════════════════════════════════════
+    odometry_selector = Node(
+        package='pegasus_ros',
+        executable='odometry_selector_node',
+        name='odometry_selector',
+        output='screen',
+        parameters=[{
+            'primary_odom_topic': '/odom_lidar',
+            'backup_odom_topic': '/odom_vision',
+            'timeout_threshold': 0.5,
+            'use_sim_time': use_sim_time,
+        }],
+    )
+
+    # ══════════════════════════════════════════════════════════
+    # 4. RTAB-Map SLAM Node (Mapping Mode)
     # ══════════════════════════════════════════════════════════
     rtabmap_slam = Node(
         package='rtabmap_slam',
@@ -124,13 +171,10 @@ def generate_launch_description():
             },
         ],
         remappings=[
-            # RGB-D from ZED X
             ('rgb/image', rgb_image_topic),
             ('rgb/camera_info', rgb_camera_info_topic),
             ('depth/image', depth_image_topic),
-            # LiDAR
             ('scan_cloud', scan_cloud_topic),
-            # IMU
             ('imu', imu_topic),
         ],
         arguments=['--delete_db_on_start'],
@@ -139,7 +183,7 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 3. RTAB-Map SLAM Node (Localization Mode)
+    # 5. RTAB-Map SLAM Node (Localization Mode)
     # ══════════════════════════════════════════════════════════
     rtabmap_slam_localization = Node(
         package='rtabmap_slam',
@@ -171,7 +215,7 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 4. RTAB-Map Visualization
+    # 6. RTAB-Map Visualization
     # ══════════════════════════════════════════════════════════
     rtabmap_viz = Node(
         package='rtabmap_viz',
@@ -190,7 +234,7 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 5. Point Cloud Assembler
+    # 7. Point Cloud Assembler
     # ══════════════════════════════════════════════════════════
     point_cloud_assembler = Node(
         package='rtabmap_util',
@@ -208,49 +252,46 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 6. Static TF Publishers
+    # 8. Static TF Publishers
     #    IMPORTANT: Update x/y/z offsets to match your actual
     #    sensor positions measured from base_link on the UAV.
     # ══════════════════════════════════════════════════════════
 
-    # base_link → velodyne
     tf_base_to_velodyne = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_velodyne',
         arguments=[
             '0.52', '0.0', '0.85',     # x, y, z (meters) — UPDATE THESE
-            '0', '0', '0',             # roll, pitch, yaw (radians)
+            '0', '0', '0',
             'base_link', 'velodyne'
         ],
     )
 
-    # base_link → zed_x_camera_center
     tf_base_to_zed_x = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
             '1.78', '0.0', '0.55',      # x, y, z (meters) — UPDATE THESE
-            '0', '0', '0',             # roll, pitch, yaw (radians)
+            '0', '0', '0',
             'base_link', 'zed_x_camera_center'
         ],
     )
 
-    # base_link → imu_link (Pixhawk Cube Orange location)
     tf_base_to_imu = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_imu',
         arguments=[
             '0.0', '0.0', '0.0',      # x, y, z (meters) — UPDATE THESE
-            '0', '0', '0',             # roll, pitch, yaw (radians)
+            '0', '0', '0',
             'base_link', 'imu_link'
         ],
     )
 
     # ══════════════════════════════════════════════════════════
-    # 7. RViz
+    # 9. RViz
     # ══════════════════════════════════════════════════════════
     rviz_config = PathJoinSubstitution([
         pegasus_share, 'config', 'rviz_slam.rviz'
@@ -266,21 +307,24 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        SetParameter(name='use_sim_time', value=use_sim_time),
+        
 
         # Arguments
+        use_sim_time_arg,
         localization_arg,
         database_path_arg,
         rviz_arg,
-        use_sim_time_arg,
-
+        
+        SetParameter(name='use_sim_time', value=use_sim_time),
         # Static TFs (must publish before SLAM nodes start)
         tf_base_to_velodyne,
         tf_base_to_zed_x,
         tf_base_to_imu,
 
-        # Odometry
+        # Odometry (dual sources with fusion)
         icp_odometry,
+        rgbd_odometry,
+        odometry_selector,
 
         # SLAM
         rtabmap_slam,

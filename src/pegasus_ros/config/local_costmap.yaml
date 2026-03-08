@@ -1,0 +1,95 @@
+# ============================================================
+#  Pegasus 3D Local Costmap Configuration (v2.3)
+#  Fuses VLP-16 LiDAR + ZED X depth into a rolling 3D voxel grid
+#
+#  v2.3 changes:
+#    - Fix #7: Added RANSAC ground removal parameters
+#      (ransac_iterations, candidate_z_band_m). The height_m
+#      parameter is now used as the RANSAC distance threshold
+#      instead of a naive z-threshold.
+# ============================================================
+
+local_costmap_node:
+  ros__parameters:
+
+    # ── Voxel Grid Geometry ────────────────────────────
+    costmap:
+      size_x_m: 40.0
+      size_y_m: 40.0
+      size_z_m: 20.0
+      resolution_m: 0.3
+      origin_frame: "base_link"
+
+    # ── LiDAR Costmap Layer ────────────────────────────
+    lidar:
+      enabled: true
+      topic: "/velodyne_points"
+      timeout_ms: 500
+      frame_id: "velodyne"
+      range_min_m: 0.5
+      range_max_m: 50.0
+      voxel_size_m: 0.2
+      ground_removal:
+        enabled: true
+        height_m: 0.3                # RANSAC distance threshold (m)
+        ransac_iterations: 50        # Fix #7: RANSAC iteration count
+        candidate_z_band_m: 0.5      # Fix #7: z-band above cloud minimum for plane candidates
+      height_band:
+        min_m: -2.0
+        max_m: 15.0
+      min_points_for_obstacle: 3
+
+    # ── ZED X Depth Costmap Layer ──────────────────────
+    zed_depth:
+      enabled: true
+      topic: "/zed_x/zed_node/depth/depth_registered"
+      camera_info_topic: "/zed_x/zed_node/rgb/camera_info"
+      timeout_ms: 500
+      frame_id: "zed_x_camera_center"
+      range_min_m: 0.5
+      range_max_m: 15.0
+      downsample_factor: 4
+      height_band:
+        min_m: -2.0
+        max_m: 15.0
+      min_points_for_obstacle: 8
+
+    # ── Fusion & Decay ─────────────────────────────────
+    fusion:
+      obstacle_persistence_s: 2.0
+      decay_check_hz: 2.0
+      max_ghost_distance_m: 3.0
+      raycasting_enabled: true
+      unknown_cost: -1
+      free_cost: 0
+      occupied_cost: 100
+
+    # ── Inflation ──────────────────────────────────────
+    inflation:
+      radius_m: 3.0                  # >= half wingspan (15ft/2 ≈ 2.3m)
+      cost_scaling_factor: 5.0
+
+    # ── Sensor Health / Degraded Modes ─────────────────
+    degraded_modes:
+      lidar_only:
+        safety_margin_multiplier: 1.5
+        max_speed_m_s: 20.0
+      camera_only:
+        safety_margin_multiplier: 2.0
+        max_speed_m_s: 10.0
+        restrict_to_forward: true
+        request_rtl_after_s: 30.0
+      all_degraded:
+        action: "emergency_loiter"
+        max_duration_s: 60.0
+
+    # ── Publishing ─────────────────────────────────────
+    publish:
+      rate_hz: 10.0
+      costmap_topic: "/pegasus/local_costmap"
+      inflated_topic: "/pegasus/local_costmap_inflated"
+      marker_topic: "/pegasus/local_costmap_markers"
+      publish_2d_projection: true
+      projection_topic: "/pegasus/local_costmap_2d"
+      projection_height_m: 0.0
+      metadata_topic: "/pegasus/costmap_metadata"

@@ -10,7 +10,7 @@ zed_node:
     # ── Camera Identity ──────────────────────────────────────
     camera_model: 'zedx'
     camera_name: 'zed_x'
-    serial_number: 0                  # ← SET THIS to your ZED X serial number
+    serial_number: 40709032                  # ← SET THIS to your ZED X serial number
     #                                 #   Find it: /usr/local/zed/tools/ZED_Explorer
 
     # ── Frames ───────────────────────────────────────────────
