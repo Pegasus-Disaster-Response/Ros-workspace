@@ -6,7 +6,7 @@ package_name = 'pegasus_ros'
 
 setup(
     name=package_name,
-    version='2.3.0',
+    version='2.6.0',
     # Fix #1: Explicit package + package_dir mapping so setuptools reliably
     # finds the pegasus_autonomy module inside the pegasus_ros source tree.
     # Previously used: packages=[package_name.replace('pegasus_ros', 'pegasus_autonomy')]
@@ -31,6 +31,9 @@ setup(
             'config/rviz_local_costmap.rviz',
             'config/path_planner.yaml',
             'config/rviz_planner_test.rviz',
+            'config/dstar_lite.yaml',
+            'config/vtol_dynamics.yaml',
+            'config/px4_offboard.yaml',
         ]),
 
         # ── Launch files ──
@@ -43,11 +46,13 @@ setup(
             'launch/path_planner.launch.py',
             'launch/gazebo_planner_test.launch.py',
             'launch/p110_gazebo_bridge_launch.py',
+            'launch/sitl_full.launch.py',
         ]),
 
         # ── World files (Gazebo SDF) ──
         (os.path.join('share', package_name, 'worlds'), [
             'worlds/pegasus_planning_test.sdf',
+            'worlds/disaster_response.sdf',
         ]),
 
         # ── Map files ──
@@ -66,8 +71,8 @@ setup(
             # ── Core autonomy nodes ──
             'mission_planner_node = pegasus_autonomy.mission_planner_node:main',
             'front_stereo_node = pegasus_autonomy.front_stereo_node:main',
-            'px4_state_subscriber_node = pegasus_autonomy.px4_state_subscriber_node:main',
             'px4_imu_bridge_node = pegasus_autonomy.px4_imu_bridge_node:main',
+            'px4_offboard_node = pegasus_autonomy.px4_offboard_node:main',
             'odometry_selector_node = pegasus_autonomy.odometry_selector_node:main',
 
             # ── 3D Local costmap nodes ──
@@ -77,6 +82,8 @@ setup(
 
             # ── Path planning nodes ──
             'global_planner_node = pegasus_autonomy.global_planner_node:main',
+            'dstar_lite_node = pegasus_autonomy.dstar_lite_node:main',
+            'mpc_trajectory_node = pegasus_autonomy.mpc_trajectory_node:main',
 
             # ── SIL test utility nodes ──
             'static_map_publisher_node = pegasus_autonomy.static_map_publisher_node:main',
