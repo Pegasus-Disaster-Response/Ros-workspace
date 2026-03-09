@@ -3,14 +3,15 @@
 #  Loaded by: icp_odometry node in pegasus_slam.launch.py
 #
 #  Fix #3: Subscription parameters must be under the correct node
-#  name (icp_odometry) so the node actually picks them up. Previously
-#  these were only under 'rtabmap:' in rtabmap.yaml, which doesn't
-#  match the icp_odometry node name — so subscribe_scan_cloud was
-#  never set to true and the node wasn't subscribing to LiDAR data.
+#  name (icp_odometry) so the node actually picks them up.
 #
 #  Fix #5: Icp/MaxCorrespondenceDistance increased from 0.15 to 1.0.
 #  With VoxelSize=0.3, voxel centers are at least 0.3m apart, so a
 #  MaxCorrespondenceDistance of 0.15 would reject most valid matches.
+#
+#  v2.6.1: Tightened for real VLP-16 hardware (was relaxed for SITL).
+#  If reverting to SITL, use: MaxCorrespondence=2.0, MaxTranslation=5.0,
+#  CorrespondenceRatio=0.005
 # ============================================================
 
 icp_odometry:
@@ -25,11 +26,11 @@ icp_odometry:
 
     # ── ICP Parameters ──────────────────────────────────────
     Icp/VoxelSize: "0.3"              # Outdoor: 0.3m voxels
-    Icp/MaxCorrespondenceDistance: "2.0"  # Increased for SITL lower frame rate
+    Icp/MaxCorrespondenceDistance: "1.0"  # Real VLP-16: tighter than SITL (was 2.0)
     Icp/PointToPlane: "true"
     Icp/Iterations: "30"
-    Icp/MaxTranslation: "5.0"         # SITL: drone moves more between frames at low sim rate
-    Icp/CorrespondenceRatio: "0.005"  # Lowered: fewer points match at distance in sim
+    Icp/MaxTranslation: "2.0"         # Real hardware: 2m max between frames (was 5.0)
+    Icp/CorrespondenceRatio: "0.01"   # Real data is denser — require 1% match (was 0.005)
 
     # ── Odometry Strategy ───────────────────────────────────
     Odom/Strategy: "0"                # Frame-to-Map

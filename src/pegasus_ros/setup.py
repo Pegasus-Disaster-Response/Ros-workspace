@@ -52,7 +52,6 @@ setup(
         # ── World files (Gazebo SDF) ──
         (os.path.join('share', package_name, 'worlds'), [
             'worlds/pegasus_planning_test.sdf',
-            'worlds/disaster_response.sdf',
         ]),
 
         # ── Map files ──

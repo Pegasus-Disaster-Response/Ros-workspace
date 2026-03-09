@@ -11,6 +11,11 @@ v2.3 changes:
     rtabmap.yaml whose params are keyed under 'rtabmap:' — a namespace
     that doesn't match either odometry node name.
 
+v2.6.1 changes:
+  - Fix: Static TF for ZED X now publishes to 'zed_x_camera_center'
+    (matching zed_x.yaml camera_frame) instead of 'camera_link' which
+    caused silent TF lookup failures for the costmap and RTAB-Map.
+
 Author: Team Pegasus
 Date: 2026
 """
@@ -262,7 +267,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_velodyne',
         arguments=[
-            '0.0', '0.0', '0.15',     # vtol1 SDF: velodyne at z=0.15 above base_link
+            '0.0', '0.0', '0.25',     # UPDATE with measured offsets from your rig
             '0', '0', '0',
             'base_link', 'velodyne'
         ],
@@ -273,9 +278,9 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
-            '0.12', '0.03', '0.242',      # vtol1 SDF: camera at (0.12, 0.03, 0.242)
+            '0.46', '0.0', '0.10',      # UPDATE with measured offsets from your rig
             '0', '0', '0',
-            'base_link', 'camera_link'
+            'base_link', 'zed_x_camera_center'  # Must match zed_x.yaml camera_frame
         ],
     )
 
