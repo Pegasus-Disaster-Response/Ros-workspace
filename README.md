@@ -66,7 +66,6 @@ Ros-workspace/
     │   │   ├── p110_gazebo_bridge_launch.py    ← Gazebo Harmonic sensor bridge
     │   │   └── vtol1_gazebo_bridge_launch.py   ← legacy bridge
     │   ├── worlds/
-    │   │   ├── disaster_response.sdf           ← 200m disaster world (5 zones + VTOL + sensors)
     │   │   └── pegasus_planning_test.sdf       ← simple 100m planner test world
     │   ├── maps/
     │   │   ├── planning_test_map.pgm + .yaml

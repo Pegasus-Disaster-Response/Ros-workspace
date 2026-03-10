@@ -129,10 +129,10 @@ class PX4ImuBridgeNode(Node):
 
         # Orientation (if available from VehicleAttitude)
         if self._latest_orientation is not None:
-            imu_msg.orientation.w = self._latest_orientation[0]
-            imu_msg.orientation.x = self._latest_orientation[1]
-            imu_msg.orientation.y = self._latest_orientation[2]
-            imu_msg.orientation.z = self._latest_orientation[3]
+            imu_msg.orientation.w = float(self._latest_orientation[0])
+            imu_msg.orientation.x = float(self._latest_orientation[1])
+            imu_msg.orientation.y = float(self._latest_orientation[2])
+            imu_msg.orientation.z = float(self._latest_orientation[3])
             # Low covariance — PX4 EKF provides good orientation
             imu_msg.orientation_covariance[0] = 0.01
             imu_msg.orientation_covariance[4] = 0.01
@@ -142,17 +142,17 @@ class PX4ImuBridgeNode(Node):
             imu_msg.orientation_covariance[0] = -1.0
 
         # Angular velocity (gyroscope)
-        imu_msg.angular_velocity.x = self._latest_gyro[0]
-        imu_msg.angular_velocity.y = self._latest_gyro[1]
-        imu_msg.angular_velocity.z = self._latest_gyro[2]
+        imu_msg.angular_velocity.x = float(self._latest_gyro[0])
+        imu_msg.angular_velocity.y = float(self._latest_gyro[1])
+        imu_msg.angular_velocity.z = float(self._latest_gyro[2])
         imu_msg.angular_velocity_covariance[0] = 0.001
         imu_msg.angular_velocity_covariance[4] = 0.001
         imu_msg.angular_velocity_covariance[8] = 0.001
 
         # Linear acceleration (accelerometer)
-        imu_msg.linear_acceleration.x = self._latest_accel[0]
-        imu_msg.linear_acceleration.y = self._latest_accel[1]
-        imu_msg.linear_acceleration.z = self._latest_accel[2]
+        imu_msg.linear_acceleration.x = float(self._latest_accel[0])
+        imu_msg.linear_acceleration.y = float(self._latest_accel[1])
+        imu_msg.linear_acceleration.z = float(self._latest_accel[2])
         imu_msg.linear_acceleration_covariance[0] = 0.01
         imu_msg.linear_acceleration_covariance[4] = 0.01
         imu_msg.linear_acceleration_covariance[8] = 0.01

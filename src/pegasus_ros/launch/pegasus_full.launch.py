@@ -6,9 +6,19 @@ Complete: Sensors + SLAM + Costmap + A* + D* Lite 3D + MPC + PX4 Offboard
 v2.5: Added PX4 offboard interface node.
       Removed px4_state_subscriber_node (stub — offboard node handles PX4 state).
 
+v2.6.2 changes:
+  - FIX: Added 'database_path' as a top-level launch argument and forwarded
+    it to the SLAM include. Previously pegasus_full.launch.py did not
+    declare or pass database_path, so the SLAM launch always fell back to
+    its own default path — and you could not override the DB location from
+    the full launch command line. Now you can run:
+      ros2 launch pegasus_ros pegasus_full.launch.py \
+        database_path:=/path/to/your/map.db localization:=true
+
 Author: Team Pegasus
 """
 
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -35,15 +45,28 @@ def generate_launch_description():
         'velodyne_ip', default_value='192.168.1.201')
     fcu_dev_arg = DeclareLaunchArgument(
         'fcu_dev', default_value='/dev/ttyTHS1',
-        description='Serial device for Pixhawk XRCE-DDS link (TELEM2 on companion)')
+        description='Serial device for Pixhawk XRCE-DDS link (TELEM1 on companion)')
     fcu_baud_arg = DeclareLaunchArgument(
         'fcu_baud', default_value='921600',
         description='Baudrate for Pixhawk XRCE-DDS serial connection')
+    enable_zed_arg = DeclareLaunchArgument(
+        'enable_zed', default_value='true',
+        description='Enable ZED X camera')
     enable_costmap_arg = DeclareLaunchArgument(
         'enable_costmap', default_value='true')
     enable_offboard_arg = DeclareLaunchArgument(
         'enable_offboard', default_value='true',
         description='Enable PX4 offboard interface')
+
+    # FIX v2.6.2: database_path declared here so it can be passed through
+    # to the SLAM child launch and overridden from the command line.
+    database_path_arg = DeclareLaunchArgument(
+        'database_path',
+        default_value=os.path.expanduser(
+            '~/Ros-workspace/maps/pegasus_disaster_map.db'
+        ),
+        description='Path to RTAB-Map database. Must match value in pegasus_slam.launch.py'
+    )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     launch_gazebo_bridge = LaunchConfiguration('launch_gazebo_bridge')
@@ -52,8 +75,10 @@ def generate_launch_description():
     velodyne_ip = LaunchConfiguration('velodyne_ip')
     fcu_dev = LaunchConfiguration('fcu_dev')
     fcu_baud = LaunchConfiguration('fcu_baud')
+    enable_zed = LaunchConfiguration('enable_zed')
     enable_costmap = LaunchConfiguration('enable_costmap')
     enable_offboard = LaunchConfiguration('enable_offboard')
+    database_path = LaunchConfiguration('database_path')
 
     # ── Gazebo Bridge ────────────────────────────────────────
     gazebo_bridge = IncludeLaunchDescription(
@@ -71,9 +96,12 @@ def generate_launch_description():
             'use_sim_time': use_sim_time,
             'velodyne_ip': velodyne_ip,
             'fcu_dev': fcu_dev,
-            'fcu_baud': fcu_baud}.items())
+            'fcu_baud': fcu_baud,
+            'enable_zed': enable_zed}.items())
 
     # ── SLAM ─────────────────────────────────────────────────
+    # FIX v2.6.2: database_path is now forwarded so the child SLAM
+    # launch uses the same DB location as the full system launch.
     slam = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -81,7 +109,9 @@ def generate_launch_description():
         launch_arguments={
             'use_sim_time': use_sim_time,
             'localization': localization,
-            'rviz': rviz}.items())
+            'rviz': rviz,
+            'enable_zed': enable_zed,
+            'database_path': database_path}.items())
 
     # ── Local Costmap ────────────────────────────────────────
     local_costmap = IncludeLaunchDescription(
@@ -149,6 +179,8 @@ def generate_launch_description():
         fcu_baud_arg,
         enable_costmap_arg,
         enable_offboard_arg,
+        enable_zed_arg,
+        database_path_arg,      # FIX v2.6.2: added
         gazebo_bridge,
         sensors,
         slam,

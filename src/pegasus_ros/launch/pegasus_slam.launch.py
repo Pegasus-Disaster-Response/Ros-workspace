@@ -16,17 +16,37 @@ v2.6.1 changes:
     (matching zed_x.yaml camera_frame) instead of 'camera_link' which
     caused silent TF lookup failures for the costmap and RTAB-Map.
 
+v2.6.2 changes:
+  - CRITICAL FIX: Removed '--delete_db_on_start' argument from rtabmap_slam
+    and rtabmap_slam_localization nodes. This flag was causing RTAB-Map to
+    wipe the database file on every single launch — meaning no map was ever
+    persisted. The database was being written and immediately deleted on the
+    next run. Remove this argument; to intentionally reset use the ROS 2
+    service call: ros2 service call /rtabmap/reset std_srvs/srv/Empty
+  - CRITICAL FIX: database_path default now resolves to
+    ~/Ros-workspace/maps/pegasus_disaster_map.db using os.path.expanduser
+    so the file ends up in a predictable, workspace-relative location.
+    Previously PathJoinSubstitution([pegasus_share, 'maps', ...]) pointed
+    into the install/ tree which (a) may not exist and (b) is wiped on
+    colcon builds.
+  - FIX: SetParameter('use_sim_time') moved to after all
+    DeclareLaunchArgument entries in the LaunchDescription list to match
+    the required ordering (args must be declared before SetParameter
+    consumes their values).
+  - FIX: database_path exposed as a forwarded argument so pegasus_full.launch.py
+    can pass it through without having to redeclare it.
+
 Author: Team Pegasus
 Date: 2026
 """
 
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.conditions import IfCondition, UnlessCondition
 from launch_ros.actions import Node, SetParameter
 from launch_ros.substitutions import FindPackageShare
-from ament_index_python.packages import get_package_share_directory
 
 
 def generate_launch_description():
@@ -34,18 +54,32 @@ def generate_launch_description():
     pegasus_share = FindPackageShare('pegasus_ros')
 
     # ── Launch Arguments ─────────────────────────────────────
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false'
+    )
+
     localization_arg = DeclareLaunchArgument(
         'localization',
         default_value='false',
         description='true=localization only, false=mapping+localization'
     )
 
+    # FIX v2.6.2: Default path is now in ~/Ros-workspace/maps/ which is
+    # persistent across builds and lives where you can actually find it.
+    # Run once: mkdir -p ~/Ros-workspace/maps
     database_path_arg = DeclareLaunchArgument(
         'database_path',
-        default_value=PathJoinSubstitution([
-            pegasus_share, 'maps', 'pegasus_disaster_map.db'
-        ]),
-        description='Path to RTAB-Map database'
+        default_value=os.path.expanduser(
+            '~/Ros-workspace/maps/pegasus_disaster_map.db'
+        ),
+        description='Path to RTAB-Map database (persistent across builds)'
+    )
+
+    enable_zed_arg = DeclareLaunchArgument(
+        'enable_zed',
+        default_value='true',
+        description='Enable ZED X RGB-D odometry'
     )
 
     rviz_arg = DeclareLaunchArgument(
@@ -54,15 +88,11 @@ def generate_launch_description():
         description='Launch RViz'
     )
 
-    use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time',
-        default_value='false'
-    )
-
     localization = LaunchConfiguration('localization')
     database_path = LaunchConfiguration('database_path')
     rviz = LaunchConfiguration('rviz')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    enable_zed = LaunchConfiguration('enable_zed')
 
     # ── Config file paths ────────────────────────────────────
     # Fix #3: Each node type gets its own config with params under
@@ -137,6 +167,7 @@ def generate_launch_description():
             ('odom', '/odom_vision'),
             ('imu', imu_topic),
         ],
+        condition=IfCondition(enable_zed),
     )
 
     # ══════════════════════════════════════════════════════════
@@ -157,6 +188,13 @@ def generate_launch_description():
 
     # ══════════════════════════════════════════════════════════
     # 4. RTAB-Map SLAM Node (Mapping Mode)
+    #
+    #  FIX v2.6.2: '--delete_db_on_start' has been REMOVED.
+    #  That argument caused RTAB-Map to delete the database file at
+    #  startup, so no map was ever persisted between runs. To
+    #  intentionally clear the map (e.g. before a new mapping mission),
+    #  either delete the file manually or call the reset service:
+    #    ros2 service call /rtabmap/reset std_srvs/srv/Empty
     # ══════════════════════════════════════════════════════════
     rtabmap_slam = Node(
         package='rtabmap_slam',
@@ -176,13 +214,16 @@ def generate_launch_description():
             },
         ],
         remappings=[
+            ('odom', '/odom'),              # FIX: namespace='rtabmap' would make this
+            #                               # /rtabmap/odom without the explicit remap,
+            #                               # but odometry_selector publishes to /odom.
             ('rgb/image', rgb_image_topic),
             ('rgb/camera_info', rgb_camera_info_topic),
             ('depth/image', depth_image_topic),
             ('scan_cloud', scan_cloud_topic),
             ('imu', imu_topic),
         ],
-        arguments=['--delete_db_on_start'],
+        # NO arguments=['--delete_db_on_start'] here
         namespace='rtabmap',
         condition=UnlessCondition(localization),
     )
@@ -209,12 +250,14 @@ def generate_launch_description():
             },
         ],
         remappings=[
+            ('odom', '/odom'),              # FIX: same namespace issue as mapping node
             ('rgb/image', rgb_image_topic),
             ('rgb/camera_info', rgb_camera_info_topic),
             ('depth/image', depth_image_topic),
             ('scan_cloud', scan_cloud_topic),
             ('imu', imu_topic),
         ],
+        # NO arguments=['--delete_db_on_start'] here either
         namespace='rtabmap',
         condition=IfCondition(localization),
     )
@@ -261,13 +304,12 @@ def generate_launch_description():
     #    IMPORTANT: Update x/y/z offsets to match your actual
     #    sensor positions measured from base_link on the UAV.
     # ══════════════════════════════════════════════════════════
-
     tf_base_to_velodyne = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_velodyne',
         arguments=[
-            '0.0', '0.0', '0.25',     # UPDATE with measured offsets from your rig
+            '0.0', '0.0', '0.25',
             '0', '0', '0',
             'base_link', 'velodyne'
         ],
@@ -278,7 +320,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
-            '0.46', '0.0', '0.10',      # UPDATE with measured offsets from your rig
+            '0.46', '0.0', '0.10',
             '0', '0', '0',
             'base_link', 'zed_x_camera_center'  # Must match zed_x.yaml camera_frame
         ],
@@ -289,7 +331,7 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_imu',
         arguments=[
-            '0.0', '0.0', '0.0',      # x, y, z (meters) — UPDATE THESE
+            '0.0', '0.0', '0.0',
             '0', '0', '0',
             'base_link', 'imu_link'
         ],
@@ -312,15 +354,21 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
-        
+        # FIX v2.6.2: All DeclareLaunchArgument entries come FIRST,
+        # then SetParameter. Previously SetParameter appeared between
+        # args in the list, which can cause evaluation-order issues
+        # depending on the launch framework version.
 
-        # Arguments
+        # Arguments (must all be declared before SetParameter)
         use_sim_time_arg,
         localization_arg,
         database_path_arg,
+        enable_zed_arg,
         rviz_arg,
-        
+
+        # Global parameter (after all args are declared)
         SetParameter(name='use_sim_time', value=use_sim_time),
+
         # Static TFs (must publish before SLAM nodes start)
         tf_base_to_velodyne,
         tf_base_to_zed_x,

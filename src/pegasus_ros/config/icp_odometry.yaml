@@ -2,16 +2,25 @@
 #  ICP LiDAR Odometry Configuration — Pegasus Disaster Response UAV
 #  Loaded by: icp_odometry node in pegasus_slam.launch.py
 #
-#  Fix #3: Subscription parameters must be under the correct node
-#  name (icp_odometry) so the node actually picks them up.
+#  Fix #3: Subscription parameters under correct node name so
+#  the node actually picks them up.
 #
 #  Fix #5: Icp/MaxCorrespondenceDistance increased from 0.15 to 1.0.
 #  With VoxelSize=0.3, voxel centers are at least 0.3m apart, so a
 #  MaxCorrespondenceDistance of 0.15 would reject most valid matches.
 #
 #  v2.6.1: Tightened for real VLP-16 hardware (was relaxed for SITL).
-#  If reverting to SITL, use: MaxCorrespondence=2.0, MaxTranslation=5.0,
-#  CorrespondenceRatio=0.005
+#
+#  v2.6.3 changes (LiDAR-only mode):
+#    - FIX: subscribe_imu set to false. With the Pixhawk IMU bridge
+#      running but gravity vector not yet initialized, the ICP node
+#      was asserting inside RTAB-Map's IMU integration code on the
+#      first scan callback, causing SIGABRT (exit code -6). Disabling
+#      IMU subscription eliminates this crash entirely. The odometry
+#      selector holds the last known good transform during any brief
+#      ICP dropout, so pose continuity is maintained without IMU.
+#      Re-enable when ZED is operational and full IMU fusion is needed.
+#    - FIX: Mem/UseOdomGravity set to false to match rtabmap.yaml.
 # ============================================================
 
 icp_odometry:
@@ -23,17 +32,22 @@ icp_odometry:
     subscribe_rgb: false
     subscribe_depth: false
     subscribe_stereo: false
+    subscribe_imu: false              # FIX v2.6.3: disabled — causes SIGABRT without
+    #                                 # fully initialized gravity vector from Pixhawk
 
     # ── ICP Parameters ──────────────────────────────────────
-    Icp/VoxelSize: "0.3"              # Outdoor: 0.3m voxels
-    Icp/MaxCorrespondenceDistance: "1.0"  # Real VLP-16: tighter than SITL (was 2.0)
+    Icp/VoxelSize: "0.3"
+    Icp/MaxCorrespondenceDistance: "1.0"
     Icp/PointToPlane: "true"
     Icp/Iterations: "30"
-    Icp/MaxTranslation: "2.0"         # Real hardware: 2m max between frames (was 5.0)
-    Icp/CorrespondenceRatio: "0.01"   # Real data is denser — require 1% match (was 0.005)
+    Icp/MaxTranslation: "2.0"
+    Icp/CorrespondenceRatio: "0.01"
 
     # ── Odometry Strategy ───────────────────────────────────
     Odom/Strategy: "0"                # Frame-to-Map
+
+    # ── Gravity ─────────────────────────────────────────────
+    Mem/UseOdomGravity: "false"       # Disabled: no IMU in LiDAR-only mode
 
     # ── Sync ────────────────────────────────────────────────
     approx_sync: true

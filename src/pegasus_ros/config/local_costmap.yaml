@@ -39,8 +39,7 @@ local_costmap_node:
     zed_depth:
       enabled: true
       topic: "/zed_x/zed_node/depth/depth_registered"
-      camera_info_topic: "/zed_x/zed_node/rgb/camera_info"
-      timeout_ms: 500
+      camera_info_topic: "/zed_x/zed_node/rgb/color/rect/camera_info"
       frame_id: "zed_x_camera_center"
       range_min_m: 0.5
       range_max_m: 15.0

@@ -206,9 +206,18 @@ class OdometrySelector(Node):
     def publish_odometry(self, odom_msg, status):
         if odom_msg is None:
             return
-        self.odom_pub.publish(odom_msg)
+        # Rewrite frame_id to 'odom' so RTABMAP's odom_frame_id matches.
+        # ICP odometry publishes with frame_id='odom_lidar' but RTABMAP
+        # expects 'odom' — mismatch causes it to silently drop all nodes.
+        out = Odometry()
+        out.header = odom_msg.header
+        out.header.frame_id = 'odom'
+        out.child_frame_id = odom_msg.child_frame_id
+        out.pose = odom_msg.pose
+        out.twist = odom_msg.twist
+        self.odom_pub.publish(out)
         self.publish_status(status)
-        self.broadcast_tf(odom_msg)
+        self.broadcast_tf(out)
 
     def publish_status(self, status):
         msg = String()

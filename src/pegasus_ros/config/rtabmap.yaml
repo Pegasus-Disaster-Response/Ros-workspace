@@ -1,12 +1,29 @@
 # ============================================================
 #  RTAB-Map SLAM Configuration — Pegasus Disaster Response UAV
-#  Sensors: ZED X (RGB-D) + VLP-16 LiDAR + Pixhawk IMU
+#  Sensors: VLP-16 LiDAR + Pixhawk IMU (ZED X temporarily disabled)
 #
 #  v2.3 changes:
-#    - Odometry-specific params (Odom/Strategy, Odom/FeatureType, etc.)
-#      moved to icp_odometry.yaml and rgbd_odometry.yaml (Fix #3).
+#    - Odometry-specific params moved to icp_odometry.yaml and
+#      rgbd_odometry.yaml (Fix #3).
 #    - Icp/MaxCorrespondenceDistance increased to 1.0 (Fix #5).
 #    - Stereo fallback params removed (not used in RGB-D mode).
+#
+#  v2.6.3 changes (LiDAR-only mode):
+#    - FIX: subscribe_scan_cloud confirmed true, subscribe_depth/rgb
+#      confirmed false — LiDAR-only SLAM is now the active mode.
+#    - FIX: Grid/Sensor changed from 2 (both) to 0 (laser only).
+#      With ZED disabled, keeping Grid/Sensor=2 causes RTAB-Map to
+#      wait for depth camera input that never arrives before updating
+#      the occupancy grid, resulting in a map that never fills.
+#    - FIX: cloud_min_depth and cloud_max_depth removed — these are
+#      depth camera parameters that have no effect in scan_cloud mode
+#      and were causing a YAML parse error due to a missing newline
+#      at the end of the file (cloud_min_depth: 0.3 was the last line
+#      with no trailing newline, corrupting the param block).
+#    - FIX: subscribe_imu changed to false. With wait_imu_to_init=false
+#      the ICP odometry node was still receiving IMU callbacks and
+#      asserting on uninitialized gravity vector, causing SIGABRT.
+#      Re-enable when ZED is back and full RGB-D+IMU fusion is needed.
 #
 #  This file is loaded by the RTAB-Map SLAM node (mapping +
 #  localization) and rtabmap_viz. Odometry nodes load their own
@@ -26,11 +43,11 @@ rtabmap:
     Mem/IncrementalMemory: "true"
     Mem/InitWMWithAllNodes: "false"
     Mem/STMSize: "30"
-    Mem/UseOdomGravity: "true"        # Align map Z-axis with gravity via IMU
+    Mem/UseOdomGravity: "false"       # Disabled: no IMU in LiDAR-only mode
 
     # ── ICP LiDAR (used by RTAB-Map for loop closure verification) ──
-    Icp/VoxelSize: "0.3"              # Outdoor: 0.3, Indoor: 0.1
-    Icp/MaxCorrespondenceDistance: "1.0"   # Fix #5: was 0.15 — must be > VoxelSize
+    Icp/VoxelSize: "0.3"
+    Icp/MaxCorrespondenceDistance: "1.0"
     Icp/PointToPlane: "true"
     Icp/Iterations: "30"
     Icp/MaxTranslation: "1.0"
@@ -52,9 +69,9 @@ rtabmap:
     Optimizer/Robust: "true"
 
     # ── 3D Grid / Occupancy Map ──────────────────────────────
-    Grid/Sensor: "2"                  # 0=laser, 1=depth camera, 2=both
+    Grid/Sensor: "0"                  # FIX v2.6.3: 0=laser only (was 2=both)
     Grid/3D: "true"
-    Grid/CellSize: "0.05"            # 5 cm cells
+    Grid/CellSize: "0.05"
     Grid/RangeMax: "30.0"
     Grid/RangeMin: "0.5"
     Grid/MaxObstacleHeight: "2.0"
@@ -70,12 +87,13 @@ rtabmap:
     Vis/InlierDistance: "0.1"
     SURF/HessianThreshold: "300"
 
-    # ── Subscription Modes (RTAB-Map SLAM node only) ─────────
-    subscribe_rgb: true
-    subscribe_depth: true
+    # ── Subscription Modes ───────────────────────────────────
+    subscribe_rgb: false
+    subscribe_depth: false
     subscribe_stereo: false
     subscribe_scan_cloud: true
     subscribe_scan: false
+    subscribe_imu: false              # FIX v2.6.3: disabled in LiDAR-only mode
 
     # ── Sync ─────────────────────────────────────────────────
     approx_sync: true
@@ -83,11 +101,160 @@ rtabmap:
     queue_size: 30
     wait_imu_to_init: false
 
-    # ── IMU ──────────────────────────────────────────────────
-    subscribe_imu: true
-
-    # ── Point Cloud Filtering (ZED X range: 0.3–20m) ────────
+    # ── Point Cloud Output ───────────────────────────────────
     cloud_voxel_size: 0.05
     cloud_output_voxelized: true
-    cloud_max_depth: 20.0
-    cloud_min_depth: 0.3
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    
