@@ -77,7 +77,7 @@ class ZedDepthCostmapLayerNode(Node):
         self.declare_parameter('zed_depth.topic',
                                '/zed_x/zed_node/depth/depth_registered')
         self.declare_parameter('zed_depth.camera_info_topic',
-                               '/zed_x/zed_node/rgb/camera_info')
+                               '/zed_x/zed_node/rgb/color/rect/camera_info')
         self.declare_parameter('zed_depth.frame_id', 'zed_x_camera_center')
         self.declare_parameter('zed_depth.timeout_ms', 500)
         self.declare_parameter('zed_depth.range_min_m', 0.5)

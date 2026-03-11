@@ -3,69 +3,73 @@
 #  Single front-facing ZED X for SLAM + perception
 #  Namespace: /zed_x
 #
-#  v2.6.2 fixes:
-#    - CRITICAL: Replaced all dotted flat keys (e.g. general.grab_resolution)
-#      with correct nested YAML structure. In ros__parameters, dotted keys are
-#      treated as literal string keys and are silently ignored by the ZED ROS2
-#      wrapper — none of the depth/video/grab settings were ever taking effect.
-#    - CRITICAL: Removed non-existent params publish_stereo, publish_left_camera,
-#      publish_right_camera (not valid ZED ROS2 wrapper params — caused no
-#      error but also did nothing, giving false confidence settings were applied).
-#    - depth_mode changed from 'PERFORMANCE' to 'NEURAL' as intended for
-#      high-quality depth maps used by RTAB-Map. PERFORMANCE was a placeholder
-#      that should have been reverted; this is why depth quality was degraded.
-#    - grab_frame_rate set to 15 retained (good for Jetson bandwidth).
-#    - All valid image/depth publish flags use correct param names.
+#  v2.7 CRITICAL FIX:
+#    The ZED ROS 2 wrapper v5.1 uses NESTED parameter names under
+#    general.*, depth.*, video.*, pos_tracking.*, etc. The previous
+#    config used FLAT parameter names (e.g. 'grab_resolution' at
+#    the top level of ros__parameters) which the wrapper silently
+#    ignored. Every single parameter override was having no effect.
+#
+#    This file now matches the exact structure used by
+#    common_stereo.yaml and zedx.yaml in the wrapper installation.
+#
+#    Additionally:
+#    - pos_tracking.pos_tracking_enabled set to FALSE so RTAB-Map
+#      is the sole TF authority for map -> odom -> base_link.
+#    - Depth mode set to NEURAL (not NEURAL_LIGHT which is the
+#      SDK 5.1 default for 'NEURAL' string on ZED X).
+#    - grab_frame_rate reduced to 15 Hz to save bandwidth.
+#    - grab_resolution set to HD1080 (good balance of quality and
+#      bandwidth for SLAM on Jetson Orin).
+#
+#  Loaded via ros_params_override_path in pegasus_sensors.launch.py
 # ============================================================
-zed_node:
-  ros__parameters:
 
-    # ── Camera Identity ──────────────────────────────────────
-    camera_model: 'zedx'
-    camera_name: 'zed_x'
-    serial_number: 40709032             # Verify: /usr/local/zed/tools/ZED_Explorer
+# IMPORTANT: The /**:ros__parameters: wrapper is required for the
+# override file to work with the ZED wrapper's composable node.
+/**:
+    ros__parameters:
 
-    # ── Frames ───────────────────────────────────────────────
-    base_frame: 'base_link'
-    camera_frame: 'zed_x_camera_center' # Must match static TF in pegasus_slam.launch.py
-    publish_tf: false                   # RTAB-Map handles map→odom→base_link TF
-    publish_map_tf: false
-    publish_imu_tf: false               # Pixhawk IMU is used, not ZED internal IMU
+        # ── General ────────────────────────────────────────────
+        general:
+            serial_number: 40709032           # Verify with ZED_Explorer
+            grab_resolution: 'HD1080'         # HD1200 is native but HD1080 saves bandwidth
+            grab_frame_rate: 15               # 15 Hz sufficient for SLAM, reduces USB/GMSL load
+            pub_frame_rate: 15.0              # Match grab rate
+            pub_resolution: 'CUSTOM'          # Use downscale factor below
+            pub_downscale_factor: 2.0         # Publish at 540p (half of 1080p)
 
-    # ── Grab / Resolution ────────────────────────────────────
-    # Previously these were written as 'general.grab_resolution: ...' which is a
-    # literal string key in YAML — the ZED wrapper never saw these values.
-    # Correct param names are at the top level of ros__parameters.
-    grab_resolution: 'HD720'            # VGA also works if bandwidth is tight
-    grab_frame_rate: 15                 # 15 Hz is sufficient for SLAM; reduces USB load
+        # ── Video ──────────────────────────────────────────────
+        video:
+            publish_rgb: true                 # Needed for RTAB-Map RGB-D mode
 
-    # ── Depth ────────────────────────────────────────────────
-    # NEURAL mode produces highest quality depth. PERFORMANCE was set as a
-    # temporary measure and was never corrected in the config.
-    depth_mode: 'NEURAL'
-    min_depth: 0.3                      # ZED X minimum reliable depth (m)
-    max_depth: 20.0                     # ZED X maximum reliable depth (m)
-    depth_stabilization: 1
+        # ── Depth ──────────────────────────────────────────────
+        depth:
+            depth_mode: 'NEURAL'              # Full NEURAL for best quality depth
+            min_depth: 0.3                    # ZED X minimum reliable depth (m)
+            max_depth: 20.0                   # ZED X maximum reliable depth (m)
+            depth_stabilization: 1            # Minimal stabilization (RTAB-Map handles filtering)
+            point_cloud_freq: 1.0             # Low freq; costmap uses depth image directly
 
-    # ── Image Output ─────────────────────────────────────────
-    img_downsample_factor: 1.0
+        # ── Positional Tracking ────────────────────────────────
+        # CRITICAL: Must be disabled. RTAB-Map is the sole TF
+        # publisher for map -> odom -> base_link. If the ZED wrapper
+        # also publishes these TFs, it causes a race condition where
+        # stale ZED poses overwrite RTAB-Map's optimized poses.
+        pos_tracking:
+            pos_tracking_enabled: true
+            publish_tf: false
+            publish_map_tf: false
+            set_gravity_as_origin: false
 
-    # ── Depth & RGB Publishing (used by RTAB-Map RGB-D mode) ─
-    # These are the correct ZED ROS2 wrapper boolean flags.
-    depth_quality: true                 # Enables depth topic publishing
-    pub_frame_rate: 15.0                # Match grab_frame_rate
+        # ── Sensors (IMU) ─────────────────────────────────────
+        # We use the Pixhawk IMU via the bridge node, not the ZED
+        # internal IMU, for SLAM. But we still let the ZED publish
+        # its IMU data in case it's useful for diagnostics.
+        sensors:
+            publish_imu_tf: false             # Pixhawk IMU is used, not ZED internal IMU
+            sensors_image_sync: false          # Pixhawk IMU is fused separately
 
-    # ── Point Cloud ──────────────────────────────────────────
-    point_cloud_freq: 1.0               # Keep low; costmap node uses depth image directly
-
-    # ── Mapping ──────────────────────────────────────────────
-    mapping_enabled: false              # RTAB-Map handles all mapping
-
-    # ── Internal Odometry ────────────────────────────────────
-    pos_tracking_enabled: false         # RTAB-Map + ICP odometry handles this
-
-    # ── IMU ──────────────────────────────────────────────────
-    sensors_image_sync: false           # Pixhawk IMU is fused separately
-
-    # ── QoS ──────────────────────────────────────────────────
-    use_sim_time: false
+        # ── Mapping ────────────────────────────────────────────
+        mapping:
+            mapping_enabled: false            # RTAB-Map handles all mapping

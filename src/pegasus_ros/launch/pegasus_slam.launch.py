@@ -108,8 +108,11 @@ def generate_launch_description():
     ])
 
     # ── Topic Names ──────────────────────────────────────────
-    rgb_image_topic = '/zed_x/zed_node/rgb/image_rect_color'
-    rgb_camera_info_topic = '/zed_x/zed_node/rgb/camera_info'
+    # FIX v2.7: Topic names updated to match ZED ROS 2 wrapper v5.1.
+    # The wrapper changed from /rgb/image_rect_color to /rgb/color/rect/image
+    # and from /rgb/camera_info to /rgb/color/rect/camera_info.
+    rgb_image_topic = '/zed_x/zed_node/rgb/color/rect/image'
+    rgb_camera_info_topic = '/zed_x/zed_node/rgb/color/rect/camera_info'
     depth_image_topic = '/zed_x/zed_node/depth/depth_registered'
     scan_cloud_topic = '/velodyne_points'
     imu_topic = '/pegasus/imu/data'
@@ -315,14 +318,24 @@ def generate_launch_description():
         ],
     )
 
+    # FIX v2.7: Target frame changed from 'zed_x_camera_center' to
+    # 'zed_x_camera_link'. The ZED v5.2 wrapper's robot_state_publisher
+    # publishes its URDF chain starting from zed_x_camera_link:
+    #   zed_x_camera_link -> zed_x_camera_center -> zed_x_left_camera_frame
+    #                     -> zed_x_left_camera_frame_optical (etc.)
+    # Previously we published base_link -> zed_x_camera_center, which
+    # created two disconnected TF trees (the URDF root was orphaned).
+    # Now we connect to the URDF root so the entire chain is reachable.
+    # Z offset adjusted: camera_center is at Z+0.016 above camera_link,
+    # so camera_link Z = 0.10 - 0.016 = 0.084.
     tf_base_to_zed_x = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
-            '0.46', '0.0', '0.10',
+            '0.46', '0.0', '0.084',
             '0', '0', '0',
-            'base_link', 'zed_x_camera_center'  # Must match zed_x.yaml camera_frame
+            'base_link', 'zed_x_camera_link'  # URDF root frame from ZED wrapper
         ],
     )
 

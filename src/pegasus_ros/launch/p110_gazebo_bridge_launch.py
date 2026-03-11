@@ -41,7 +41,7 @@ def launch_camera_bridges(context):
             f'{image_topic}@sensor_msgs/msg/Image[gz.msgs.Image'
         ],
         remappings=[
-            (image_topic, '/zed_x/zed_node/rgb/image_rect_color'),
+            (image_topic, '/zed_x/zed_node/rgb/color/rect/image'),
         ],
         output='screen',
     )
@@ -54,7 +54,7 @@ def launch_camera_bridges(context):
             f'{info_topic}@sensor_msgs/msg/CameraInfo[gz.msgs.CameraInfo'
         ],
         remappings=[
-            (info_topic, '/zed_x/zed_node/rgb/camera_info'),
+            (info_topic, '/zed_x/zed_node/rgb/color/rect/camera_info'),
         ],
         output='screen',
     )
