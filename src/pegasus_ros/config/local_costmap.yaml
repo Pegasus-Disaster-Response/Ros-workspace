@@ -51,8 +51,8 @@ local_costmap_node:
 
     # ── Fusion & Decay ─────────────────────────────────
     fusion:
-      obstacle_persistence_s: 2.0
-      decay_check_hz: 2.0
+      obstacle_persistence_s: 5.0
+      decay_check_hz: 1.0
       max_ghost_distance_m: 3.0
       raycasting_enabled: true
       unknown_cost: -1
