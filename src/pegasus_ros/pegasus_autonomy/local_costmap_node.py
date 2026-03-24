@@ -44,6 +44,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import PointCloud2, PointField
 from nav_msgs.msg import OccupancyGrid, Odometry
+from builtin_interfaces.msg import Time
 from std_msgs.msg import Header, Bool, String, ColorRGBA, Int8MultiArray, MultiArrayDimension
 from geometry_msgs.msg import Point, Pose, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
@@ -98,6 +99,30 @@ def xyz_to_pointcloud2(points: np.ndarray, frame_id: str,
     msg.row_step = 12 * n
     msg.is_dense = True
     msg.data = points.astype(np.float32).tobytes()
+    return msg
+
+
+def xyz_cost_to_pointcloud2(points: np.ndarray, costs: np.ndarray,
+                             frame_id: str, stamp) -> PointCloud2:
+    """Pack [x, y, z, intensity] into a PointCloud2 for cost-gradient display."""
+    msg = PointCloud2()
+    msg.header = Header(stamp=stamp, frame_id=frame_id)
+    n = points.shape[0]
+    msg.height = 1
+    msg.width = n
+    msg.fields = [
+        PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+    ]
+    msg.is_bigendian = False
+    msg.point_step = 16
+    msg.row_step = 16 * n
+    msg.is_dense = True
+    xyzc = np.column_stack([points.astype(np.float32),
+                            costs.astype(np.float32)])
+    msg.data = xyzc.tobytes()
     return msg
 
 
@@ -336,6 +361,8 @@ class LocalCostmap3DNode(Node):
         self.declare_parameter('publish.costmap_topic', '/pegasus/local_costmap')
         self.declare_parameter('publish.inflated_topic', '/pegasus/local_costmap_inflated')
         self.declare_parameter('publish.marker_topic', '/pegasus/local_costmap_markers')
+        self.declare_parameter('publish.marker_use_latest_tf', True)
+        self.declare_parameter('publish.marker_empty_hold_s', 0.5)
         self.declare_parameter('publish.publish_2d_projection', True)
         self.declare_parameter('publish.projection_topic', '/pegasus/local_costmap_2d')
         self.declare_parameter('publish.projection_height_m', 0.0)
@@ -358,6 +385,8 @@ class LocalCostmap3DNode(Node):
         costmap_topic = self.get_parameter('publish.costmap_topic').value
         inflated_topic = self.get_parameter('publish.inflated_topic').value
         marker_topic = self.get_parameter('publish.marker_topic').value
+        self.marker_use_latest_tf = self.get_parameter('publish.marker_use_latest_tf').value
+        self.marker_empty_hold_s = self.get_parameter('publish.marker_empty_hold_s').value
         self.pub_2d = self.get_parameter('publish.publish_2d_projection').value
         proj_topic = self.get_parameter('publish.projection_topic').value
         self.proj_height = self.get_parameter('publish.projection_height_m').value
@@ -384,6 +413,9 @@ class LocalCostmap3DNode(Node):
         self.current_speed = 0.0
         self.lidar_origin = None
         self.zed_origin = None
+        self.last_marker_points = np.empty((0, 3), dtype=np.float32)
+        self.last_marker_sources = np.empty(0, dtype=np.uint8)
+        self.last_marker_update_s = 0.0
 
         # ── Subscribers ──
         sensor_qos = QoSProfile(
@@ -522,19 +554,28 @@ class LocalCostmap3DNode(Node):
             inflated_grid = self.voxel_grid.compute_inflation(
                 self.inflation_radius, self.inflation_scaling)
 
-        if points.shape[0] == 0:
-            self._publish_empty_markers(stamp)
-            return
-
         # 1. Raw occupied voxels
-        self.costmap_pub.publish(
-            xyz_to_pointcloud2(points, 'base_link', stamp))
+        if points.shape[0] > 0:
+            self.costmap_pub.publish(
+                xyz_to_pointcloud2(points, 'base_link', stamp))
 
         # 2. Inflated costmap as PointCloud2
         self._publish_inflated_cloud(inflated_grid, stamp)
 
-        # 3. RViz markers
-        self._publish_markers(points, sources, stamp)
+        # 3. RViz markers (always publish, even when empty)
+        now_s = self.get_clock().now().nanoseconds / 1e9
+        marker_points = points
+        marker_sources = sources
+        if points.shape[0] > 0:
+            self.last_marker_points = points.copy()
+            self.last_marker_sources = sources.copy()
+            self.last_marker_update_s = now_s
+        elif (self.last_marker_points.shape[0] > 0 and
+              (now_s - self.last_marker_update_s) <= self.marker_empty_hold_s):
+            marker_points = self.last_marker_points
+            marker_sources = self.last_marker_sources
+
+        self._publish_markers(marker_points, marker_sources, stamp)
 
         # 4. 2D inflated projection
         if self.pub_2d:
@@ -583,42 +624,54 @@ class LocalCostmap3DNode(Node):
             (inflated_voxels[:, 1] + 0.5) * res - self.voxel_grid.size_y / 2.0,
             (inflated_voxels[:, 2] + 0.5) * res - self.voxel_grid.size_z / 2.0,
         ]).astype(np.float32)
+        costs = inflated_grid[
+            inflated_voxels[:, 0],
+            inflated_voxels[:, 1],
+            inflated_voxels[:, 2],
+        ]
         self.inflated_pub.publish(
-            xyz_to_pointcloud2(centers, 'base_link', stamp))
+            xyz_cost_to_pointcloud2(centers, costs, 'base_link', stamp))
 
     def _publish_markers(self, points, sources, stamp):
         marker_array = MarkerArray()
+
         marker = Marker()
-        marker.header = Header(stamp=stamp, frame_id='base_link')
+        marker_stamp = Time() if self.marker_use_latest_tf else stamp
+        marker.header = Header(stamp=marker_stamp, frame_id='base_link')
         marker.ns = 'local_costmap_3d'
         marker.id = 0
         marker.type = Marker.CUBE_LIST
         marker.action = Marker.ADD
+        marker.frame_locked = True
         marker.pose.orientation.w = 1.0
         res = self.voxel_grid.resolution
         marker.scale.x = res * 0.9
         marker.scale.y = res * 0.9
         marker.scale.z = res * 0.9
-        z_min = points[:, 2].min()
-        z_max = points[:, 2].max()
-        z_range = max(z_max - z_min, 0.1)
-        for i in range(points.shape[0]):
-            marker.points.append(Point(
-                x=float(points[i, 0]), y=float(points[i, 1]),
-                z=float(points[i, 2])))
-            alpha = 0.4 + 0.6 * (points[i, 2] - z_min) / z_range
-            src = sources[i]
-            if src == 1:
-                c = ColorRGBA(r=1.0, g=0.2, b=0.2, a=float(alpha))
-            elif src == 2:
-                c = ColorRGBA(r=0.2, g=0.4, b=1.0, a=float(alpha))
-            elif src == 3:
-                c = ColorRGBA(r=0.2, g=1.0, b=0.2, a=float(alpha))
-            else:
-                c = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.3)
-            marker.colors.append(c)
+        if points.shape[0] > 0:
+            z_min = points[:, 2].min()
+            z_max = points[:, 2].max()
+            z_range = max(z_max - z_min, 0.1)
+            for i in range(points.shape[0]):
+                marker.points.append(Point(
+                    x=float(points[i, 0]), y=float(points[i, 1]),
+                    z=float(points[i, 2])))
+                alpha = 0.4 + 0.6 * (points[i, 2] - z_min) / z_range
+                src = sources[i]
+                if src == 1:
+                    c = ColorRGBA(r=1.0, g=0.2, b=0.2, a=float(alpha))
+                elif src == 2:
+                    c = ColorRGBA(r=0.2, g=0.4, b=1.0, a=float(alpha))
+                elif src == 3:
+                    c = ColorRGBA(r=0.2, g=1.0, b=0.2, a=float(alpha))
+                else:
+                    c = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.3)
+                marker.colors.append(c)
+
+        # Keep marker persistent and update it every publish cycle.
+        # Empty CUBE_LIST clears the display without DELETEALL-induced flicker.
         marker.lifetime.sec = 0
-        marker.lifetime.nanosec = 200_000_000
+        marker.lifetime.nanosec = 0
         marker_array.markers.append(marker)
         self.marker_pub.publish(marker_array)
 
