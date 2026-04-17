@@ -84,7 +84,7 @@ def generate_launch_description():
     gazebo_bridge = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                pegasus_share, 'launch', 'vtol1_gazebo_bridge_launch.py'])]),
+                pegasus_share, 'launch', 'p110_gazebo_bridge_launch.py'])]),
         condition=IfCondition(launch_gazebo_bridge))
 
     # ── Sensors ──────────────────────────────────────────────

@@ -41,10 +41,8 @@ setup(
             'launch/pegasus_full.launch.py',
             'launch/pegasus_sensors.launch.py',
             'launch/pegasus_slam.launch.py',
-            'launch/vtol1_gazebo_bridge_launch.py',
             'launch/local_costmap.launch.py',
             'launch/path_planner.launch.py',
-            'launch/gazebo_planner_test.launch.py',
             'launch/p110_gazebo_bridge_launch.py',
             'launch/sitl_full.launch.py',
         ]),
@@ -69,7 +67,6 @@ setup(
         'console_scripts': [
             # ── Core autonomy nodes ──
             'mission_planner_node = pegasus_autonomy.mission_planner_node:main',
-            'front_stereo_node = pegasus_autonomy.front_stereo_node:main',
             'px4_imu_bridge_node = pegasus_autonomy.px4_imu_bridge_node:main',
             'px4_offboard_node = pegasus_autonomy.px4_offboard_node:main',
             'odometry_selector_node = pegasus_autonomy.odometry_selector_node:main',
