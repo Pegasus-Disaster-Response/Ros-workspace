@@ -1,406 +1,248 @@
 #!/usr/bin/env python3
-"""
-Pegasus MPC Trajectory Smoother Node
---------------------------------------
-Converts the D* Lite local path (jagged grid waypoints) into a smooth,
-kinodynamically feasible trajectory that respects the VTOL's physical
-limits. Outputs position+velocity setpoints for PX4 offboard control.
-
-Pipeline position:
-    A* → D* Lite → MPC (THIS NODE) → PX4 Offboard Interface
-
-The MPC uses a simple receding-horizon approach:
-  1. Sample a lookahead window from the local path
-  2. Fit a smooth trajectory (cubic spline) through the waypoints
-  3. Enforce velocity, acceleration, and turn-rate limits
-  4. Output setpoints at the control rate (50 Hz)
-
-Placeholder dynamics are based on typical eVTOL specs (~50 kg class).
-Update config/vtol_dynamics.yaml with your actual aircraft parameters.
-
-Publishes:
-    /pegasus/trajectory/setpoint     (geometry_msgs/PoseStamped — current target)
-    /pegasus/trajectory/predicted     (nav_msgs/Path — MPC predicted trajectory)
-    /pegasus/trajectory/status        (std_msgs/String — JSON status)
-
-Subscribes:
-    /pegasus/path_planner/local_path (nav_msgs/Path — from D* Lite)
-    /odom                            (nav_msgs/Odometry — current state)
-
-Author: Team Pegasus — Cal Poly Pomona
-"""
-
 import json
 import math
-import time
-
-import numpy as np
+from typing import List, Optional, Tuple
 
 import rclpy
+from geometry_msgs.msg import TwistStamped
+from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-
-from nav_msgs.msg import Path, Odometry
-from geometry_msgs.msg import PoseStamped, TwistStamped
-from std_msgs.msg import Header, String
+from std_msgs.msg import String
 
 
-class MPCTrajectoryNode(Node):
+class MPCTrackerNode(Node):
+    def __init__(self) -> None:
+        super().__init__('mpc_tracker_node')
 
-    def __init__(self):
-        super().__init__('mpc_trajectory_node')
+        self.declare_parameter('path_topic', '/mpc_sim/reference_path')
+        self.declare_parameter('odom_topic', '/mpc_sim/odom')
+        self.declare_parameter('cmd_topic', '/mpc_sim/cmd_vel')
+        self.declare_parameter('status_topic', '/mpc_sim/status')
+        self.declare_parameter('control_rate_hz', 20.0)
+        self.declare_parameter('dt', 0.2)
+        self.declare_parameter('horizon_steps', 10)
+        self.declare_parameter('lookahead_points', 6)
+        self.declare_parameter('min_speed_m_s', 0.8)
+        self.declare_parameter('max_speed_m_s', 4.0)
+        self.declare_parameter('max_yaw_rate_rad_s', 1.2)
+        self.declare_parameter('max_vz_m_s', 1.5)
+        self.declare_parameter('arrival_tolerance_m', 1.0)
+        self.declare_parameter('global_reacquire_distance_m', 8.0)
+        self.declare_parameter('loop_path', True)
+        self.declare_parameter('near_target_slowdown_distance_m', 6.0)
+        self.declare_parameter('min_speed_near_target_m_s', 0.15)
 
-        # ── VTOL Dynamics Parameters ────────────────────────
-        # These are loaded from vtol_dynamics.yaml.
-        # Placeholder values based on ~50 kg eVTOL, 15ft wingspan.
-        self.declare_parameter('vtol.mass_kg', 50.0)
-        self.declare_parameter('vtol.wingspan_m', 4.572)
-        self.declare_parameter('vtol.max_speed_ms', 20.0)
-        self.declare_parameter('vtol.min_speed_ms', 0.0)
-        self.declare_parameter('vtol.max_accel_ms2', 3.0)
-        self.declare_parameter('vtol.max_decel_ms2', 4.0)
-        self.declare_parameter('vtol.max_climb_rate_ms', 3.0)
-        self.declare_parameter('vtol.max_descent_rate_ms', 2.0)
-        self.declare_parameter('vtol.max_bank_angle_deg', 30.0)
-        self.declare_parameter('vtol.max_yaw_rate_degs', 60.0)
-        self.declare_parameter('vtol.flight_mode', 'MC')
+        self.path_topic = self.get_parameter('path_topic').value
+        self.odom_topic = self.get_parameter('odom_topic').value
+        self.cmd_topic = self.get_parameter('cmd_topic').value
+        self.status_topic = self.get_parameter('status_topic').value
 
-        # ── MPC Parameters ──────────────────────────────────
-        self.declare_parameter('mpc.control_rate_hz', 50.0)
-        self.declare_parameter('mpc.horizon_s', 2.0)
-        self.declare_parameter('mpc.horizon_steps', 20)
-        self.declare_parameter('mpc.lookahead_m', 15.0)
-        self.declare_parameter('mpc.path_smoothing_factor', 0.3)
-        self.declare_parameter('mpc.waypoint_reach_tolerance_m', 1.5)
+        self.control_rate_hz = float(self.get_parameter('control_rate_hz').value)
+        self.dt = float(self.get_parameter('dt').value)
+        self.horizon_steps = int(self.get_parameter('horizon_steps').value)
+        self.lookahead_points = int(self.get_parameter('lookahead_points').value)
+        self.min_speed = float(self.get_parameter('min_speed_m_s').value)
+        self.max_speed = float(self.get_parameter('max_speed_m_s').value)
+        self.max_yaw_rate = float(self.get_parameter('max_yaw_rate_rad_s').value)
+        self.max_vz = float(self.get_parameter('max_vz_m_s').value)
+        self.arrival_tol = float(self.get_parameter('arrival_tolerance_m').value)
+        self.global_reacquire_distance = float(self.get_parameter('global_reacquire_distance_m').value)
+        self.loop_path = bool(self.get_parameter('loop_path').value)
+        self.near_target_slowdown_distance = float(self.get_parameter('near_target_slowdown_distance_m').value)
+        self.min_speed_near_target = float(self.get_parameter('min_speed_near_target_m_s').value)
 
-        # ── Altitude constraints ────────────────────────────
-        self.declare_parameter('altitude.min_m', 5.0)
-        self.declare_parameter('altitude.max_m', 120.0)
+        self.path_points: List[Tuple[float, float, float]] = []
+        self.current_state: Optional[Tuple[float, float, float, float]] = None
+        self.last_nearest_index = 0
 
-        # Read parameters
-        self.mass = self.get_parameter('vtol.mass_kg').value
-        self.wingspan = self.get_parameter('vtol.wingspan_m').value
-        self.max_speed = self.get_parameter('vtol.max_speed_ms').value
-        self.min_speed = self.get_parameter('vtol.min_speed_ms').value
-        self.max_accel = self.get_parameter('vtol.max_accel_ms2').value
-        self.max_decel = self.get_parameter('vtol.max_decel_ms2').value
-        self.max_climb = self.get_parameter('vtol.max_climb_rate_ms').value
-        self.max_descent = self.get_parameter('vtol.max_descent_rate_ms').value
-        self.max_bank_rad = math.radians(
-            self.get_parameter('vtol.max_bank_angle_deg').value)
-        self.max_yaw_rate = math.radians(
-            self.get_parameter('vtol.max_yaw_rate_degs').value)
-        self.flight_mode = self.get_parameter('vtol.flight_mode').value
+        self.create_subscription(Path, self.path_topic, self._path_cb, 10)
+        self.create_subscription(Odometry, self.odom_topic, self._odom_cb, 10)
 
-        self.control_hz = self.get_parameter('mpc.control_rate_hz').value
-        self.horizon_s = self.get_parameter('mpc.horizon_s').value
-        self.horizon_steps = self.get_parameter('mpc.horizon_steps').value
-        self.lookahead = self.get_parameter('mpc.lookahead_m').value
-        self.smooth_factor = self.get_parameter('mpc.path_smoothing_factor').value
-        self.wp_tolerance = self.get_parameter('mpc.waypoint_reach_tolerance_m').value
-        self.min_alt = self.get_parameter('altitude.min_m').value
-        self.max_alt = self.get_parameter('altitude.max_m').value
+        self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
+        self.status_pub = self.create_publisher(String, self.status_topic, 10)
 
-        # Derived: minimum turn radius in FW mode
-        # R = v² / (g * tan(bank_angle))
-        if self.flight_mode == 'FW' and self.max_bank_rad > 0.01:
-            self.min_turn_radius = (
-                self.max_speed ** 2 /
-                (9.81 * math.tan(self.max_bank_rad)))
-        else:
-            self.min_turn_radius = 0.0  # MC mode can turn in place
+        self.create_timer(1.0 / max(1.0, self.control_rate_hz), self._control_tick)
 
-        # ── State ───────────────────────────────────────────
-        self.local_path = None
-        self.current_odom = None
-        self.current_wp_idx = 0
-        self.controller_state = "IDLE"
-        self.setpoint_count = 0
+    def _path_cb(self, msg: Path) -> None:
+        self.path_points = [
+            (p.pose.position.x, p.pose.position.y, p.pose.position.z)
+            for p in msg.poses
+        ]
+        if self.last_nearest_index >= len(self.path_points):
+            self.last_nearest_index = 0
 
-        # ── Subscribers ─────────────────────────────────────
-        self.create_subscription(
-            Path, '/pegasus/path_planner/local_path',
-            self._local_path_cb, 10)
-        self.create_subscription(
-            Odometry, '/odom', self._odom_cb, 10)
+    def _quat_to_yaw(self, z: float, w: float) -> float:
+        return math.atan2(2.0 * w * z, 1.0 - 2.0 * z * z)
 
-        # ── Publishers ──────────────────────────────────────
-        self.setpoint_pub = self.create_publisher(
-            PoseStamped, '/pegasus/trajectory/setpoint', 10)
-        self.velocity_pub = self.create_publisher(
-            TwistStamped, '/pegasus/trajectory/velocity_setpoint', 10)
-        self.predicted_pub = self.create_publisher(
-            Path, '/pegasus/trajectory/predicted', 10)
-        self.status_pub = self.create_publisher(
-            String, '/pegasus/trajectory/status', 10)
+    def _odom_cb(self, msg: Odometry) -> None:
+        x = msg.pose.pose.position.x
+        y = msg.pose.pose.position.y
+        z = msg.pose.pose.position.z
+        yaw = self._quat_to_yaw(msg.pose.pose.orientation.z, msg.pose.pose.orientation.w)
+        self.current_state = (x, y, z, yaw)
 
-        # ── Timers ──────────────────────────────────────────
-        self.create_timer(1.0 / self.control_hz, self._control_tick)
-        self.create_timer(1.0, self._publish_status)
+    def _find_nearest_index(self, x: float, y: float, z: float) -> int:
+        if not self.path_points:
+            return 0
 
-        self.get_logger().info(
-            f'MPC Trajectory: {self.control_hz}Hz, horizon={self.horizon_s}s, '
-            f'mode={self.flight_mode}, mass={self.mass}kg, '
-            f'max_speed={self.max_speed}m/s, '
-            f'min_turn_r={self.min_turn_radius:.1f}m')
+        def dist_sq(idx: int) -> float:
+            px, py, pz = self.path_points[idx]
+            return (px - x) ** 2 + (py - y) ** 2 + (pz - z) ** 2
 
-    # ── Callbacks ────────────────────────────────────────────
+        if self.loop_path:
+            nearest = min(range(len(self.path_points)), key=dist_sq)
+            self.last_nearest_index = nearest
+            return nearest
 
-    def _local_path_cb(self, msg: Path):
-        if len(msg.poses) < 2:
-            self.local_path = None
-            self.controller_state = "WAITING_FOR_PATH"
-            return
-        self.local_path = msg
-        self.current_wp_idx = 0
-        self.controller_state = "TRACKING"
+        start = max(0, self.last_nearest_index - 10)
+        end = min(len(self.path_points), self.last_nearest_index + 30)
+        if start >= end:
+            start, end = 0, len(self.path_points)
 
-    def _odom_cb(self, msg: Odometry):
-        self.current_odom = msg
+        nearest = start
+        best = float('inf')
+        for idx in range(start, end):
+            d = dist_sq(idx)
+            if d < best:
+                best = d
+                nearest = idx
 
-    # ── Control Loop ─────────────────────────────────────────
+        if math.sqrt(best) > self.global_reacquire_distance:
+            nearest = min(range(len(self.path_points)), key=dist_sq)
 
-    def _control_tick(self):
-        """Main MPC control loop at control_rate_hz."""
-        if self.local_path is None or self.current_odom is None:
-            return
-        if self.controller_state != "TRACKING":
-            return
+        self.last_nearest_index = nearest
+        return nearest
 
-        poses = self.local_path.poses
-        if self.current_wp_idx >= len(poses):
-            self.controller_state = "GOAL_REACHED"
-            self.get_logger().info('MPC: trajectory complete')
-            return
+    def _simulate_cost(
+        self,
+        state: Tuple[float, float, float, float],
+        target: Tuple[float, float, float],
+        speed: float,
+        yaw_rate: float,
+        vz: float,
+    ) -> float:
+        x, y, z, yaw = state
+        total_cost = 0.0
 
-        # Current state
-        px = self.current_odom.pose.pose.position.x
-        py = self.current_odom.pose.pose.position.y
-        pz = self.current_odom.pose.pose.position.z
-        vx = self.current_odom.twist.twist.linear.x
-        vy = self.current_odom.twist.twist.linear.y
-        vz = self.current_odom.twist.twist.linear.z
-        speed = math.sqrt(vx*vx + vy*vy)
+        for _ in range(self.horizon_steps):
+            yaw += yaw_rate * self.dt
+            x += speed * math.cos(yaw) * self.dt
+            y += speed * math.sin(yaw) * self.dt
+            z += vz * self.dt
 
-        # Advance waypoint index if close enough
-        while self.current_wp_idx < len(poses) - 1:
-            wp = poses[self.current_wp_idx].pose.position
-            dx = wp.x - px
-            dy = wp.y - py
-            if math.sqrt(dx*dx + dy*dy) < self.wp_tolerance:
-                self.current_wp_idx += 1
-            else:
-                break
+            tx, ty, tz = target
+            dx = tx - x
+            dy = ty - y
+            dz = tz - z
+            pos_cost = dx * dx + dy * dy + 1.2 * dz * dz
 
-        # Collect lookahead window from current waypoint
-        lookahead_pts = []
-        dist_accum = 0.0
-        for i in range(self.current_wp_idx, len(poses)):
-            p = poses[i].pose.position
-            lookahead_pts.append((p.x, p.y, p.z))
-            if i > self.current_wp_idx:
-                prev = poses[i-1].pose.position
-                seg = math.sqrt(
-                    (p.x - prev.x)**2 + (p.y - prev.y)**2)
-                dist_accum += seg
-                if dist_accum >= self.lookahead:
-                    break
+            desired_yaw = math.atan2(dy, dx)
+            yaw_err = math.atan2(math.sin(desired_yaw - yaw), math.cos(desired_yaw - yaw))
+            heading_cost = 0.3 * yaw_err * yaw_err
+            control_cost = 0.05 * (speed * speed + yaw_rate * yaw_rate + vz * vz)
 
-        if not lookahead_pts:
-            return
+            total_cost += pos_cost + heading_cost + control_cost
 
-        # ── Smooth trajectory through lookahead points ──
-        # Simple approach: exponential moving average smoothing
-        # then enforce velocity/acceleration limits per step.
-        smooth_pts = self._smooth_path(lookahead_pts, px, py, pz)
+        terminal_dx = target[0] - x
+        terminal_dy = target[1] - y
+        terminal_dz = target[2] - z
+        total_cost += 2.0 * (terminal_dx * terminal_dx + terminal_dy * terminal_dy + terminal_dz * terminal_dz)
 
-        # ── Enforce kinodynamic constraints ──
-        constrained = self._apply_constraints(
-            smooth_pts, speed, px, py, pz)
+        return total_cost
 
-        # ── Publish the immediate setpoint ──
-        if constrained:
-            target = constrained[0]
-            self._publish_setpoint(target, constrained)
+    def _publish_command(self, speed: float, yaw_rate: float, vz: float) -> None:
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.twist.linear.x = float(speed)
+        msg.twist.linear.z = float(vz)
+        msg.twist.angular.z = float(yaw_rate)
+        self.cmd_pub.publish(msg)
 
-            # Publish predicted trajectory
-            self._publish_predicted(constrained)
-
-            self.setpoint_count += 1
-
-    def _smooth_path(self, pts, px, py, pz):
-        """
-        Smooth waypoints using exponential filter.
-        Prepend current position for continuity.
-        """
-        if len(pts) < 2:
-            return pts
-
-        # Prepend current position
-        all_pts = [(px, py, pz)] + list(pts)
-
-        # Exponential moving average
-        alpha = self.smooth_factor
-        smoothed = [all_pts[0]]
-        for i in range(1, len(all_pts)):
-            sx = alpha * all_pts[i][0] + (1 - alpha) * smoothed[-1][0]
-            sy = alpha * all_pts[i][1] + (1 - alpha) * smoothed[-1][1]
-            sz = alpha * all_pts[i][2] + (1 - alpha) * smoothed[-1][2]
-            smoothed.append((sx, sy, sz))
-
-        return smoothed[1:]  # remove prepended current pos
-
-    def _apply_constraints(self, pts, current_speed, px, py, pz):
-        """
-        Enforce velocity, acceleration, and altitude constraints.
-        Returns list of (x, y, z, vx, vy, vz) tuples.
-        """
-        if not pts:
-            return []
-
-        dt = self.horizon_s / max(self.horizon_steps, 1)
-        result = []
-
-        prev_x, prev_y, prev_z = px, py, pz
-        prev_speed = current_speed
-
-        for i, (tx, ty, tz) in enumerate(pts[:self.horizon_steps]):
-            # Direction to target
-            dx = tx - prev_x
-            dy = ty - prev_y
-            dz = tz - prev_z
-            dist_2d = math.sqrt(dx*dx + dy*dy)
-
-            if dist_2d < 0.01:
-                result.append((tx, ty, tz, 0.0, 0.0, 0.0))
-                continue
-
-            # Desired speed: proportional to distance, clamped
-            desired_speed = min(self.max_speed, dist_2d / dt)
-
-            # Enforce acceleration limits
-            speed_diff = desired_speed - prev_speed
-            if speed_diff > 0:
-                desired_speed = min(
-                    desired_speed,
-                    prev_speed + self.max_accel * dt)
-            else:
-                desired_speed = max(
-                    desired_speed,
-                    prev_speed - self.max_decel * dt)
-
-            desired_speed = max(self.min_speed, desired_speed)
-
-            # Velocity components
-            heading = math.atan2(dy, dx)
-
-            # Check yaw rate limit
-            if i > 0 and len(result) > 0:
-                prev_heading = math.atan2(
-                    result[-1][4], result[-1][3])
-                if abs(result[-1][3]) + abs(result[-1][4]) > 0.01:
-                    yaw_diff = heading - prev_heading
-                    # Normalize to [-pi, pi]
-                    yaw_diff = (yaw_diff + math.pi) % (2*math.pi) - math.pi
-                    max_yaw_step = self.max_yaw_rate * dt
-                    if abs(yaw_diff) > max_yaw_step:
-                        heading = prev_heading + math.copysign(
-                            max_yaw_step, yaw_diff)
-
-            vx_cmd = desired_speed * math.cos(heading)
-            vy_cmd = desired_speed * math.sin(heading)
-
-            # Vertical rate limits
-            vz_desired = dz / dt if dt > 0 else 0.0
-            vz_cmd = max(-self.max_descent,
-                         min(self.max_climb, vz_desired))
-
-            # Altitude clamp
-            new_z = prev_z + vz_cmd * dt
-            new_z = max(self.min_alt, min(self.max_alt, new_z))
-
-            # Position prediction
-            new_x = prev_x + vx_cmd * dt
-            new_y = prev_y + vy_cmd * dt
-
-            result.append((new_x, new_y, new_z, vx_cmd, vy_cmd, vz_cmd))
-
-            prev_x, prev_y, prev_z = new_x, new_y, new_z
-            prev_speed = math.sqrt(vx_cmd*vx_cmd + vy_cmd*vy_cmd)
-
-        return result
-
-    def _publish_setpoint(self, target, trajectory):
-        """Publish immediate position setpoint."""
-        msg = PoseStamped()
-        msg.header = Header(
-            stamp=self.get_clock().now().to_msg(), frame_id='map')
-        msg.pose.position.x = target[0]
-        msg.pose.position.y = target[1]
-        msg.pose.position.z = target[2]
-
-        # Yaw from velocity
-        if abs(target[3]) + abs(target[4]) > 0.01:
-            yaw = math.atan2(target[4], target[3])
-        else:
-            yaw = 0.0
-        msg.pose.orientation.z = math.sin(yaw / 2.0)
-        msg.pose.orientation.w = math.cos(yaw / 2.0)
-
-        self.setpoint_pub.publish(msg)
-
-        # Also publish velocity setpoint
-        vel_msg = TwistStamped()
-        vel_msg.header = msg.header
-        vel_msg.twist.linear.x = target[3]
-        vel_msg.twist.linear.y = target[4]
-        vel_msg.twist.linear.z = target[5]
-        self.velocity_pub.publish(vel_msg)
-
-    def _publish_predicted(self, trajectory):
-        """Publish the MPC predicted trajectory for visualization."""
-        path_msg = Path()
-        path_msg.header = Header(
-            stamp=self.get_clock().now().to_msg(), frame_id='map')
-        for x, y, z, vx, vy, vz in trajectory:
-            pose = PoseStamped()
-            pose.header = path_msg.header
-            pose.pose.position.x = x
-            pose.pose.position.y = y
-            pose.pose.position.z = z
-            if abs(vx) + abs(vy) > 0.01:
-                yaw = math.atan2(vy, vx)
-                pose.pose.orientation.z = math.sin(yaw / 2.0)
-                pose.pose.orientation.w = math.cos(yaw / 2.0)
-            else:
-                pose.pose.orientation.w = 1.0
-            path_msg.poses.append(pose)
-        self.predicted_pub.publish(path_msg)
-
-    def _publish_status(self):
-        status = {
-            "state": self.controller_state,
-            "flight_mode": self.flight_mode,
-            "has_path": self.local_path is not None,
-            "has_odom": self.current_odom is not None,
-            "current_wp_idx": self.current_wp_idx,
-            "total_waypoints": len(self.local_path.poses) if self.local_path else 0,
-            "setpoints_published": self.setpoint_count,
-            "min_turn_radius_m": round(self.min_turn_radius, 2),
-        }
+    def _publish_status(self, payload: dict) -> None:
         msg = String()
-        msg.data = json.dumps(status)
+        msg.data = json.dumps(payload)
         self.status_pub.publish(msg)
 
+    def _control_tick(self) -> None:
+        if self.current_state is None or len(self.path_points) < 2:
+            self._publish_command(0.0, 0.0, 0.0)
+            self._publish_status({'mpc_active': False, 'reason': 'waiting_for_path_or_odom'})
+            return
 
-def main(args=None):
+        x, y, z, yaw = self.current_state
+        nearest_idx = self._find_nearest_index(x, y, z)
+        if self.loop_path:
+            target_idx = (nearest_idx + self.lookahead_points) % len(self.path_points)
+        else:
+            target_idx = min(len(self.path_points) - 1, nearest_idx + self.lookahead_points)
+        target = self.path_points[target_idx]
+        final_goal = self.path_points[-1]
+
+        dist_to_goal = math.sqrt(
+            (final_goal[0] - x) ** 2 + (final_goal[1] - y) ** 2 + (final_goal[2] - z) ** 2
+        )
+        if (not self.loop_path) and dist_to_goal < self.arrival_tol:
+            self._publish_command(0.0, 0.0, 0.0)
+            self._publish_status({
+                'mpc_active': False,
+                'reason': 'goal_reached',
+                'distance_to_goal_m': round(dist_to_goal, 3),
+            })
+            return
+
+        dist_to_target = math.sqrt(
+            (target[0] - x) ** 2 + (target[1] - y) ** 2 + (target[2] - z) ** 2
+        )
+
+        if dist_to_target < self.near_target_slowdown_distance:
+            scale = max(0.0, min(1.0, dist_to_target / max(0.01, self.near_target_slowdown_distance)))
+            effective_min_speed = self.min_speed_near_target + (self.min_speed - self.min_speed_near_target) * scale
+        else:
+            effective_min_speed = self.min_speed
+
+        speed_candidates = [0.0, effective_min_speed, 0.5 * (effective_min_speed + self.max_speed), self.max_speed]
+        speed_candidates = sorted({round(max(0.0, min(self.max_speed, s)), 4) for s in speed_candidates})
+        yaw_candidates = [-self.max_yaw_rate, -0.5 * self.max_yaw_rate, 0.0, 0.5 * self.max_yaw_rate, self.max_yaw_rate]
+        vz_candidates = [-self.max_vz, -0.5 * self.max_vz, 0.0, 0.5 * self.max_vz, self.max_vz]
+
+        best = None
+        best_cost = float('inf')
+        for speed in speed_candidates:
+            for yaw_rate in yaw_candidates:
+                for vz in vz_candidates:
+                    cost = self._simulate_cost((x, y, z, yaw), target, speed, yaw_rate, vz)
+                    if cost < best_cost:
+                        best_cost = cost
+                        best = (speed, yaw_rate, vz)
+
+        if best is None:
+            self._publish_command(0.0, 0.0, 0.0)
+            return
+
+        speed_cmd, yaw_rate_cmd, vz_cmd = best
+        self._publish_command(speed_cmd, yaw_rate_cmd, vz_cmd)
+        self._publish_status({
+            'mpc_active': True,
+            'nearest_index': int(nearest_idx),
+            'target_index': int(target_idx),
+            'distance_to_target_m': round(dist_to_target, 3),
+            'distance_to_goal_m': round(dist_to_goal, 3),
+            'speed_cmd_m_s': round(speed_cmd, 3),
+            'yaw_rate_cmd_rad_s': round(yaw_rate_cmd, 3),
+            'vz_cmd_m_s': round(vz_cmd, 3),
+            'objective': round(best_cost, 3),
+        })
+
+
+def main(args=None) -> None:
     rclpy.init(args=args)
-    node = MPCTrajectoryNode()
+    node = MPCTrackerNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
-    finally:
-        node.destroy_node()
+    node.destroy_node()
+    if rclpy.ok():
         rclpy.shutdown()
 
 
