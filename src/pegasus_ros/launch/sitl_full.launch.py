@@ -27,10 +27,10 @@ Author: Team Pegasus — Cal Poly Pomona
 """
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
-from launch.conditions import IfCondition
+
 from launch_ros.actions import Node, SetParameter
 from launch_ros.substitutions import FindPackageShare
 
@@ -41,23 +41,22 @@ def generate_launch_description():
 
     # ── Arguments ────────────────────────────────────────────
     vehicle_arg = DeclareLaunchArgument(
-        'vehicle', default_value='p110_v1',
-        description='PX4 SITL Gazebo vehicle model (e.g. p110_v1, x500)')
+        'vehicle', default_value='p110_v2',
+        description='PX4 SITL Gazebo vehicle model (e.g. p110_v2, x500)')
 
     gz_world_arg = DeclareLaunchArgument(
-        'gz_world', default_value='baylands',
+        'gz_world', default_value='p110_world',
         description='Gazebo world name (must match PX4_GZ_WORLD)')
 
     gz_model_arg = DeclareLaunchArgument(
-        'gz_model', default_value='vtol1_0',
+        'gz_model', default_value='p110_v2_0',
         description='Gazebo model instance name (PX4 appends _0)')
 
     use_sim_time_arg = DeclareLaunchArgument(
         'use_sim_time', default_value='true',
         description='Use Gazebo simulation clock')
 
-    rviz_arg = DeclareLaunchArgument(
-        'rviz', default_value='true')
+
 
     auto_engage_arg = DeclareLaunchArgument(
         'auto_engage', default_value='false',
@@ -67,17 +66,28 @@ def generate_launch_description():
         'auto_arm', default_value='false',
         description='Auto-arm vehicle (SITL only!)')
 
-    vehicle = LaunchConfiguration('vehicle')
     gz_world = LaunchConfiguration('gz_world')
     gz_model = LaunchConfiguration('gz_model')
     use_sim_time = LaunchConfiguration('use_sim_time')
-    rviz = LaunchConfiguration('rviz')
+
     auto_engage = LaunchConfiguration('auto_engage')
     auto_arm = LaunchConfiguration('auto_arm')
 
-    # ── 0. PX4 SITL + Gazebo ─────────────────────────────────
+    # ── 0a. XRCE-DDS Agent ───────────────────────────────────
+    xrce_agent = ExecuteProcess(
+        cmd=['/home/pegasus/Micro-XRCE-DDS-Agent/build/MicroXRCEAgent', 'udp4', '-p', '8888'],
+        output='screen',
+    )
+
+    # ── 0b. QGroundControl ───────────────────────────────────
+    qgc = ExecuteProcess(
+        cmd=['flatpak', 'run', 'org.mavlink.qgroundcontrol'],
+        output='screen',
+    )
+
+    # ── 0c. PX4 SITL + Gazebo ────────────────────────────────
     px4_sitl = ExecuteProcess(
-        cmd=['bash', '-lc', ['cd ~/PX4-Simulation && make px4_sitl gz_', vehicle]],
+        cmd=['bash', '-lc', ['cd ~/PX4-Simulation && PX4_GZ_MODEL_NAME=p110_v2_0 make px4_sitl gz_p110_v2_p110_world CMAKE_ARGS=-DCMAKE_POLICY_VERSION_MINIMUM=3.5']],
         output='screen',
     )
 
@@ -142,14 +152,18 @@ def generate_launch_description():
         parameters=[dstar_config, {'use_sim_time': use_sim_time}])
 
     # ── 6. MPC Trajectory Smoother ───────────────────────────
-    vtol_config = PathJoinSubstitution([
-        pegasus_share, 'config', 'vtol_dynamics.yaml'])
     mpc = Node(
         package='pegasus_ros',
         executable='mpc_trajectory_node',
         name='mpc_trajectory_node',
         output='screen',
-        parameters=[vtol_config, {'use_sim_time': use_sim_time}])
+        parameters=[{
+            'use_sim_time': use_sim_time,
+            'path_topic':   '/pegasus/path_planner/global_path',
+            'odom_topic':   '/odom',
+            'cmd_topic':    '/pegasus/trajectory/setpoint',
+            'status_topic': '/pegasus/trajectory/status',
+        }])
 
     # ── 7. PX4 Offboard Interface ────────────────────────────
     offboard_config = PathJoinSubstitution([
@@ -174,18 +188,18 @@ def generate_launch_description():
         executable='mission_planner_node',
         name='mission_planner_node',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}])
+        parameters=[{'use_sim_time': use_sim_time, 'auto_start_search': True}])
 
     # ── 9. RViz ─────────────────────────────────────────────
     rviz_config = PathJoinSubstitution([
         pegasus_share, 'config', 'rviz_planner_test.rviz'])
-    rviz_node = Node(
-        package='rviz2',
-        executable='rviz2',
-        name='rviz2',
-        arguments=['-d', rviz_config],
-        parameters=[{'use_sim_time': use_sim_time}],
-        condition=IfCondition(rviz))
+    rviz_node = TimerAction(
+        period=5.0,
+        actions=[ExecuteProcess(
+            cmd=['rviz2', '-d', rviz_config],
+            output='screen',
+        )]
+    )
 
     return LaunchDescription([
         # Arguments
@@ -193,13 +207,14 @@ def generate_launch_description():
         gz_world_arg,
         gz_model_arg,
         use_sim_time_arg,
-        rviz_arg,
         auto_engage_arg,
         auto_arm_arg,
 
         SetParameter(name='use_sim_time', value=use_sim_time),
 
-        # PX4 SITL + Gazebo + all sensor bridges
+        # XRCE-DDS + QGroundControl + PX4 SITL + Gazebo + all sensor bridges
+        xrce_agent,
+        qgc,
         px4_sitl,
         gazebo_bridge,
 

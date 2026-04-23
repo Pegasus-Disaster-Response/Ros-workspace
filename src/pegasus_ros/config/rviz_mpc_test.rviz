@@ -1,0 +1,168 @@
+Panels:
+  - Class: rviz_common/Displays
+    Help Height: 78
+    Name: Displays
+    Property Tree Widget:
+      Expanded:
+        - /Reference Path1
+        - /MPC Lookahead1
+        - /MPC Target1
+        - /Vehicle TF1
+      Splitter Ratio: 0.5
+    Tree Height: 600
+  - Class: rviz_common/Selection
+    Name: Selection
+  - Class: rviz_common/Tool Properties
+    Name: Tool Properties
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Value: true
+      Cell Size: 10
+      Color:
+        R: 0.4
+        G: 0.4
+        B: 0.4
+        A: 1.0
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Normal Cell Count: 0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Plane: XY
+      Plane Cell Count: 100
+      Reference Frame: map
+    - Class: rviz_default_plugins/TF
+      Name: Vehicle TF
+      Value: true
+      Frame Timeout: 15
+      Frames:
+        All Enabled: false
+        base_link:
+          Value: true
+      Marker Scale: 10.0
+      Show Arrows: true
+      Show Axes: true
+      Show Names: true
+      Tree:
+        map:
+          base_link:
+            {}
+      Update Interval: 0.0
+    - Class: rviz_default_plugins/Path
+      Name: Reference Path
+      Value: true
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Value: /mpc_sim/reference_path
+      Color:
+        R: 0.8
+        G: 0.8
+        B: 0.8
+        A: 1.0
+      Line Style: Lines
+      Line Width: 2.0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Color:
+        R: 1.0
+        G: 0.85
+        B: 0.1
+        A: 1.0
+      Pose Style: None
+    - Class: rviz_default_plugins/Path
+      Name: MPC Lookahead
+      Value: true
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Value: /mpc_sim/viz/lookahead_path
+      Color:
+        R: 1.0
+        G: 0.65
+        B: 0.0
+        A: 1.0
+      Line Style: Lines
+      Line Width: 4.0
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0
+      Pose Style: None
+    - Class: rviz_default_plugins/Marker
+      Name: MPC Target
+      Value: true
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Value: /mpc_sim/viz/target
+      Queue Size: 10
+    - Class: rviz_default_plugins/Odometry
+      Name: Vehicle Odometry
+      Value: true
+      Topic:
+        Depth: 10
+        Durability Policy: Volatile
+        Value: /mpc_sim/odom
+      Angle Tolerance: 0.1
+      Keep: 200
+      Position Tolerance: 0.1
+      Shape:
+        Alpha: 0.8
+        Axes Length: 8.0
+        Axes Radius: 0.5
+        Color:
+          R: 0.0
+          G: 0.6
+          B: 1.0
+          A: 0.8
+        Head Length: 4.0
+        Head Radius: 2.0
+        Shaft Length: 8.0
+        Shaft Radius: 1.0
+        Value: Arrow
+  Enabled: true
+  Global Options:
+    Background Color:
+      R: 0.05
+      G: 0.05
+      B: 0.05
+      A: 1.0
+    Fixed Frame: map
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+      Hide Inactive: false
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top-down view
+      Near Clip Distance: 0.01
+      Scale: 1.5
+      Target Frame: map
+      Value: TopDownOrtho (rviz_default_plugins)
+      X: 0
+      Y: 0
+    Saved: ~
+Window Geometry:
+  Displays:
+    collapsed: false
+  Height: 900
+  Hide Left Dock: false
+  Hide Right Dock: true
+  Width: 1400
+  X: 0
+  Y: 0

@@ -7,7 +7,8 @@ import rclpy
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry, Path
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import ColorRGBA, Header, String
+from visualization_msgs.msg import Marker
 
 
 class MPCTrackerNode(Node):
@@ -18,19 +19,60 @@ class MPCTrackerNode(Node):
         self.declare_parameter('odom_topic', '/mpc_sim/odom')
         self.declare_parameter('cmd_topic', '/mpc_sim/cmd_vel')
         self.declare_parameter('status_topic', '/mpc_sim/status')
+
+        # [EST] 20 Hz is sufficient; P110 actuator bandwidth not yet measured.
+        # Raise to 50 Hz after actuator time constants are confirmed from bench test.
         self.declare_parameter('control_rate_hz', 20.0)
-        self.declare_parameter('dt', 0.2)
-        self.declare_parameter('horizon_steps', 10)
-        self.declare_parameter('lookahead_points', 6)
-        self.declare_parameter('min_speed_m_s', 0.8)
-        self.declare_parameter('max_speed_m_s', 4.0)
-        self.declare_parameter('max_yaw_rate_rad_s', 1.2)
-        self.declare_parameter('max_vz_m_s', 1.5)
-        self.declare_parameter('arrival_tolerance_m', 1.0)
-        self.declare_parameter('global_reacquire_distance_m', 8.0)
-        self.declare_parameter('loop_path', True)
-        self.declare_parameter('near_target_slowdown_distance_m', 6.0)
-        self.declare_parameter('min_speed_near_target_m_s', 0.15)
+
+        # [EST] MPC prediction timestep. At cruise (18 m/s), 0.5 s/step → ~9 m per step.
+        # Shorter dt increases compute load; longer dt loses resolution in tight turns.
+        self.declare_parameter('dt', 0.5)
+
+        # [EST] 20 steps × 0.5 s = 10 s / ~180 m horizon at cruise.
+        # Covers the deceleration window and a full approach segment.
+        self.declare_parameter('horizon_steps', 20)
+
+        # [EST] Waypoints ahead to use as the MPC target. At ~5 m path resolution,
+        # 10 points ≈ 50 m lookahead, giving ~2.8 s foresight at cruise.
+        self.declare_parameter('lookahead_points', 10)
+
+        # [PDR] Hard lower bound = stall speed: 26.84 mph = 12.0 m/s (FW mode).
+        # Do NOT reduce below this in fixed-wing flight — stall boundary.
+        self.declare_parameter('min_speed_m_s', 12.0)
+
+        # [PDR] Nominal cruise: 40.27 mph = 18.01 m/s. Used as the conservative
+        # MPC operating ceiling. Absolute max from PDR is 119.23 mph = 53.31 m/s —
+        # expand only after flight-test envelope clearance.
+        self.declare_parameter('max_speed_m_s', 18.01)
+
+        # [EST] FW yaw rate is bank-angle limited, not motor limited.
+        # At cruise (18 m/s) with 35° bank: R = v²/(g·tan35°) ≈ 47 m → ω = v/R ≈ 0.38 rad/s.
+        # 0.40 rad/s adds a small margin. Tighten after flight-test turn data.
+        self.declare_parameter('max_yaw_rate_rad_s', 0.40)
+
+        # [PDR] Max rate of climb: 24.15 mph = 10.80 m/s.
+        # Descent rate not in PDR — [EST] 8.0 m/s (≈ 0.74× climb rate). Confirm from flight test.
+        self.declare_parameter('max_vz_m_s', 10.80)
+
+        # [EST] At 12 m/s near-target (stall-limited), 15 m gives ~1.25 s to confirm arrival.
+        # Tighten after testing GPS/odom accuracy at low altitude.
+        self.declare_parameter('arrival_tolerance_m', 15.0)
+
+        # [EST] At 18 m/s cruise, path divergence of 50 m is reachable in ~2.8 s.
+        # If the vehicle strays farther than this, do a full nearest-point search.
+        self.declare_parameter('global_reacquire_distance_m', 50.0)
+
+        # P110 is a point-to-point mission vehicle, not a looping platform.
+        self.declare_parameter('loop_path', False)
+
+        # [EST] Deceleration from cruise (18 m/s) to stall (12 m/s) at ~3 m/s²
+        # requires ~12 m. 60 m gives comfortable margin and smooth speed ramp.
+        self.declare_parameter('near_target_slowdown_distance_m', 60.0)
+
+        # [PDR] Cannot fly slower than stall speed (12.0 m/s) in FW mode.
+        # If transitioning to MC hover, this must be managed separately in the
+        # transition controller — do not reduce this value for FW-only operation.
+        self.declare_parameter('min_speed_near_target_m_s', 12.0)
 
         self.path_topic = self.get_parameter('path_topic').value
         self.odom_topic = self.get_parameter('odom_topic').value
@@ -60,6 +102,8 @@ class MPCTrackerNode(Node):
 
         self.cmd_pub = self.create_publisher(TwistStamped, self.cmd_topic, 10)
         self.status_pub = self.create_publisher(String, self.status_topic, 10)
+        self.target_marker_pub = self.create_publisher(Marker, '/mpc_sim/viz/target', 10)
+        self.lookahead_path_pub = self.create_publisher(Path, '/mpc_sim/viz/lookahead_path', 10)
 
         self.create_timer(1.0 / max(1.0, self.control_rate_hz), self._control_tick)
 
@@ -221,6 +265,7 @@ class MPCTrackerNode(Node):
 
         speed_cmd, yaw_rate_cmd, vz_cmd = best
         self._publish_command(speed_cmd, yaw_rate_cmd, vz_cmd)
+        self._publish_viz(target, nearest_idx, target_idx)
         self._publish_status({
             'mpc_active': True,
             'nearest_index': int(nearest_idx),
@@ -232,6 +277,44 @@ class MPCTrackerNode(Node):
             'vz_cmd_m_s': round(vz_cmd, 3),
             'objective': round(best_cost, 3),
         })
+
+
+    def _publish_viz(
+        self,
+        target: Tuple[float, float, float],
+        nearest_idx: int,
+        target_idx: int,
+    ) -> None:
+        stamp = self.get_clock().now().to_msg()
+
+        marker = Marker()
+        marker.header = Header(stamp=stamp, frame_id='map')
+        marker.ns = 'mpc_target'
+        marker.id = 0
+        marker.type = Marker.SPHERE
+        marker.action = Marker.ADD
+        marker.pose.position.x = target[0]
+        marker.pose.position.y = target[1]
+        marker.pose.position.z = target[2]
+        marker.pose.orientation.w = 1.0
+        marker.scale.x = marker.scale.y = marker.scale.z = 5.0
+        marker.color = ColorRGBA(r=0.0, g=1.0, b=0.2, a=0.9)
+        marker.lifetime.sec = 1
+        self.target_marker_pub.publish(marker)
+
+        path_msg = Path()
+        path_msg.header = Header(stamp=stamp, frame_id='map')
+        end = min(len(self.path_points), target_idx + 1)
+        for pt in self.path_points[nearest_idx:end]:
+            from geometry_msgs.msg import PoseStamped
+            ps = PoseStamped()
+            ps.header = path_msg.header
+            ps.pose.position.x = pt[0]
+            ps.pose.position.y = pt[1]
+            ps.pose.position.z = pt[2]
+            ps.pose.orientation.w = 1.0
+            path_msg.poses.append(ps)
+        self.lookahead_path_pub.publish(path_msg)
 
 
 def main(args=None) -> None:

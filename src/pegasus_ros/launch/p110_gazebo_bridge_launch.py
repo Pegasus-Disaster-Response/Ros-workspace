@@ -85,11 +85,11 @@ def generate_launch_description():
         description='Launch RViz2 for visualization')
 
     gz_world_arg = DeclareLaunchArgument(
-        'gz_world', default_value='baylands',
+        'gz_world', default_value='p110_world',
         description='Gazebo world name (must match PX4_GZ_WORLD)')
 
     gz_model_arg = DeclareLaunchArgument(
-        'gz_model', default_value='vtol1_0',
+        'gz_model', default_value='p110_v2_0',
         description='Gazebo model instance name (PX4 appends _0)')
 
     # ── 1. Clock Bridge ───────────────────────────────────
@@ -128,7 +128,7 @@ def generate_launch_description():
         executable='parameter_bridge',
         name='odom_bridge',
         arguments=[
-            '/model/vtol1_0/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry'
+            '/model/p110_v2_0/odometry_with_covariance@nav_msgs/msg/Odometry[gz.msgs.OdometryWithCovariance'
         ],
         output='screen',
     )

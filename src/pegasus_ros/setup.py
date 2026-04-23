@@ -34,6 +34,7 @@ setup(
             'config/dstar_lite.yaml',
             'config/vtol_dynamics.yaml',
             'config/px4_offboard.yaml',
+            'config/rviz_mpc_test.rviz',
         ]),
 
         # ── Launch files ──
@@ -45,6 +46,7 @@ setup(
             'launch/path_planner.launch.py',
             'launch/p110_gazebo_bridge_launch.py',
             'launch/sitl_full.launch.py',
+            'launch/mpc_rviz_test.launch.py',
         ]),
 
         # ── World files (Gazebo SDF) ──
@@ -84,6 +86,10 @@ setup(
             # ── SIL test utility nodes ──
             'static_map_publisher_node = pegasus_autonomy.static_map_publisher_node:main',
             'static_odom_publisher_node = pegasus_autonomy.static_odom_publisher_node:main',
+
+            # ── MPC RViz test harness ──
+            'mpc_sim_path_publisher = pegasus_autonomy.mpc_sim_path_publisher:main',
+            'mpc_sim_vehicle = pegasus_autonomy.mpc_sim_vehicle:main',
         ],
     },
 )

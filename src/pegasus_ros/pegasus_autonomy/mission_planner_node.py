@@ -33,8 +33,12 @@ class MissionPlannerNode(Node):
     def __init__(self):
         super().__init__('mission_planner_node')
 
+        self.declare_parameter('auto_start_search', False)
+        self.auto_start_search = self.get_parameter('auto_start_search').value
+
         self.mission_status  = 'INITIALIZING'
         self.slam_initialized = False
+        self.odom_initialized = False  # fallback: /odom when SLAM absent
         self.px4_connected   = False
         self.current_pose    = None
         self.px4_odom        = None
@@ -47,6 +51,7 @@ class MissionPlannerNode(Node):
         self.poi_target      = None
         self.search_waypoints = []
         self.search_wp_index  = 0
+        self._auto_started    = False
 
         px4_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -76,6 +81,9 @@ class MissionPlannerNode(Node):
         # Point-of-interest from detection pipeline or operator
         self.create_subscription(PoseStamped, '/pegasus/autonomy/poi',
             self.poi_callback, 10)
+        # Fallback odometry when SLAM is not running (e.g. SITL)
+        self.create_subscription(Odometry, '/odom',
+            self.odom_fallback_callback, 10)
 
         # ── Publishers ───────────────────────────────────────────────
         self.status_pub   = self.create_publisher(String,
@@ -113,6 +121,17 @@ class MissionPlannerNode(Node):
         if not self.px4_connected:
             self.px4_connected = True
             self.get_logger().info('PX4 connected via XRCE-DDS')
+
+    def odom_fallback_callback(self, msg: Odometry):
+        if self.slam_initialized:
+            return  # SLAM is running — don't override with fallback
+        self.current_pose = msg.pose.pose
+        if not self.odom_initialized:
+            self.odom_initialized = True
+            self.home_position = msg.pose.pose.position
+            p = self.home_position
+            self.get_logger().info(
+                f'Odom fallback initialized — home [{p.x:.1f}, {p.y:.1f}, {p.z:.1f}]')
 
     def sensor_callback(self, msg: Imu):
         pass  # Available for vibration monitoring or tilt detection
@@ -186,11 +205,20 @@ class MissionPlannerNode(Node):
                     0.0)
 
     def mission_planning_loop(self):
-        if not self.slam_initialized or self.current_pose is None:
+        pose_ready = self.slam_initialized or self.odom_initialized
+        if not pose_ready or self.current_pose is None:
             return
 
         if self.mission_status == 'INITIALIZING':
             self._transition('READY')
+
+        if (self.auto_start_search and not self._auto_started
+                and self.mission_status == 'READY'
+                and self.vehicle_armed
+                and self.nav_state == 14):  # NAV_STATE_OFFBOARD
+            self.get_logger().info('Auto-starting search pattern')
+            self._auto_started = True
+            self._transition('SEARCH_PATTERN')
 
         elif self.mission_status == 'SEARCH_PATTERN':
             self._run_search_pattern()
