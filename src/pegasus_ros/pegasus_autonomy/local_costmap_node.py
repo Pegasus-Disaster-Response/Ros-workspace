@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
 """
-Pegasus 3D Local Costmap Node (v2)
------------------------------------
+Pegasus 3D Local Costmap Node (v2.4)
+--------------------------------------
 Fuses obstacle point clouds from the LiDAR and ZED X costmap layers
 into a 3D voxel grid centered on the UAV (base_link frame).
 
-v2 changes from v1:
-  1. Raycasting: marks voxels along sensor→obstacle rays as FREE,
-     so the planner can distinguish "clear" from "unknown"
-  2. Inflation: publishes an inflated costmap with safety buffer gradient
-  3. Speed-adaptive decay: ghost trail length stays constant regardless
-     of flight speed (uses /odom velocity or PX4 fallback)
-  4. Costmap metadata: publishes grid info for downstream nodes
+v2.4 changes:
+  - NEW: Publishes the full 3D inflated voxel grid as a flat Int8MultiArray
+    on /pegasus/local_costmap_3d_grid for consumption by the 3D D* Lite
+    planner. The array is (nx * ny * nz) in row-major order with grid
+    metadata in the JSON metadata topic.
+  - The 2D projection is still published for backward compatibility.
 
 Publishes:
   /pegasus/local_costmap           (PointCloud2 — raw occupied voxels)
-  /pegasus/local_costmap_inflated  (PointCloud2 — occupied + inflated voxels with cost)
+  /pegasus/local_costmap_inflated  (PointCloud2 — occupied + inflated with cost)
+  /pegasus/local_costmap_3d_grid   (std_msgs/Int8MultiArray — full 3D inflated grid)
   /pegasus/local_costmap_markers   (MarkerArray — colored 3D cubes for RViz)
-  /pegasus/local_costmap_2d        (OccupancyGrid — 2D inflated slice for A*/D* Lite)
+  /pegasus/local_costmap_2d        (OccupancyGrid — 2D inflated slice for A*)
   /pegasus/sensor_status           (String — "nominal" / "lidar_only" / etc.)
   /pegasus/costmap_metadata        (String — JSON with grid info for planners)
 
@@ -44,7 +44,8 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import PointCloud2, PointField
 from nav_msgs.msg import OccupancyGrid, Odometry
-from std_msgs.msg import Header, Bool, String, ColorRGBA
+from builtin_interfaces.msg import Time
+from std_msgs.msg import Header, Bool, String, ColorRGBA, Int8MultiArray, MultiArrayDimension
 from geometry_msgs.msg import Point, Pose, PointStamped
 from visualization_msgs.msg import Marker, MarkerArray
 
@@ -101,6 +102,30 @@ def xyz_to_pointcloud2(points: np.ndarray, frame_id: str,
     return msg
 
 
+def xyz_cost_to_pointcloud2(points: np.ndarray, costs: np.ndarray,
+                             frame_id: str, stamp) -> PointCloud2:
+    """Pack [x, y, z, intensity] into a PointCloud2 for cost-gradient display."""
+    msg = PointCloud2()
+    msg.header = Header(stamp=stamp, frame_id=frame_id)
+    n = points.shape[0]
+    msg.height = 1
+    msg.width = n
+    msg.fields = [
+        PointField(name='x',         offset=0,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='y',         offset=4,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='z',         offset=8,  datatype=PointField.FLOAT32, count=1),
+        PointField(name='intensity', offset=12, datatype=PointField.FLOAT32, count=1),
+    ]
+    msg.is_bigendian = False
+    msg.point_step = 16
+    msg.row_step = 16 * n
+    msg.is_dense = True
+    xyzc = np.column_stack([points.astype(np.float32),
+                            costs.astype(np.float32)])
+    msg.data = xyzc.tobytes()
+    return msg
+
+
 # ── 3D Voxel Grid ───────────────────────────────────────────────────
 
 class VoxelGrid3D:
@@ -127,7 +152,6 @@ class VoxelGrid3D:
         self.source = np.zeros((self.nx, self.ny, self.nz), dtype=np.uint8)
 
     def world_to_voxel(self, points: np.ndarray) -> np.ndarray:
-        """Convert Nx3 base_link points to integer voxel indices."""
         shifted = points.copy()
         shifted[:, 0] += self.size_x / 2.0
         shifted[:, 1] += self.size_y / 2.0
@@ -135,7 +159,6 @@ class VoxelGrid3D:
         return np.floor(shifted / self.resolution).astype(np.int32)
 
     def world_to_voxel_single(self, x, y, z):
-        """Convert a single point to voxel indices."""
         ix = int((x + self.size_x / 2.0) / self.resolution)
         iy = int((y + self.size_y / 2.0) / self.resolution)
         iz = int((z + self.size_z / 2.0) / self.resolution)
@@ -150,7 +173,6 @@ class VoxelGrid3D:
         return 0 <= ix < self.nx and 0 <= iy < self.ny and 0 <= iz < self.nz
 
     def insert_obstacles(self, points_base, timestamp, source_id):
-        """Mark voxels as occupied."""
         if points_base.shape[0] == 0:
             return
         idx = self.world_to_voxel(points_base)
@@ -164,74 +186,37 @@ class VoxelGrid3D:
         self.source[ix, iy, iz] |= source_id
 
     def mark_free_along_rays(self, origin, obstacle_points, timestamp):
-        """
-        Raycast from sensor origin to each obstacle point.
-        Mark all voxels along the ray (excluding the endpoint) as FREE.
-
-        Uses a fast 3D Bresenham-like stepping through the voxel grid.
-        The endpoint voxel is NOT marked free (it's the obstacle).
-
-        Args:
-            origin:          (3,) sensor position in base_link
-            obstacle_points: Nx3 obstacle positions in base_link
-            timestamp:       current time for freshness tracking
-        """
         if obstacle_points.shape[0] == 0:
             return
-
         ox, oy, oz = self.world_to_voxel_single(
             origin[0], origin[1], origin[2])
-
-        # For performance, subsample rays if there are many obstacles.
-        # Raycasting every single obstacle point is expensive; nearby
-        # obstacles share most of the same ray path. Process at most
-        # max_rays per callback to keep latency bounded.
         max_rays = 200
         if obstacle_points.shape[0] > max_rays:
             indices = np.random.choice(
                 obstacle_points.shape[0], max_rays, replace=False)
             obstacle_points = obstacle_points[indices]
-
         for i in range(obstacle_points.shape[0]):
             ex, ey, ez = self.world_to_voxel_single(
-                obstacle_points[i, 0],
-                obstacle_points[i, 1],
+                obstacle_points[i, 0], obstacle_points[i, 1],
                 obstacle_points[i, 2])
-
-            # 3D Bresenham ray march
             self._raycast_bresenham(ox, oy, oz, ex, ey, ez, timestamp)
 
     def _raycast_bresenham(self, x0, y0, z0, x1, y1, z1, timestamp):
-        """
-        March from (x0,y0,z0) to (x1,y1,z1) in voxel space.
-        Mark all intermediate voxels as free (cost=0).
-        Do NOT mark the endpoint (that's the obstacle).
-        """
         dx = abs(x1 - x0)
         dy = abs(y1 - y0)
         dz = abs(z1 - z0)
-
         sx = 1 if x1 > x0 else -1
         sy = 1 if y1 > y0 else -1
         sz = 1 if z1 > z0 else -1
-
-        # Determine the dominant axis
         dm = max(dx, dy, dz)
         if dm == 0:
             return
-
-        # Step increments as fractions of the dominant axis
-        # Using integer arithmetic with doubled deltas for precision
         x, y, z = x0, y0, z0
-
         if dx >= dy and dx >= dz:
-            # X is dominant
             err_y = 2 * dy - dx
             err_z = 2 * dz - dx
             for _ in range(dx):
                 if self.in_bounds_single(x, y, z):
-                    # Only mark free if not currently occupied
-                    # (don't erase a confirmed obstacle from another ray)
                     if self.cost[x, y, z] < 100.0:
                         self.cost[x, y, z] = 0.0
                         self.timestamps[x, y, z] = timestamp
@@ -244,9 +229,7 @@ class VoxelGrid3D:
                     err_z -= 2 * dx
                 err_y += 2 * dy
                 err_z += 2 * dz
-
         elif dy >= dx and dy >= dz:
-            # Y is dominant
             err_x = 2 * dx - dy
             err_z = 2 * dz - dy
             for _ in range(dy):
@@ -263,9 +246,7 @@ class VoxelGrid3D:
                     err_z -= 2 * dy
                 err_x += 2 * dx
                 err_z += 2 * dz
-
         else:
-            # Z is dominant
             err_x = 2 * dx - dz
             err_y = 2 * dy - dz
             for _ in range(dz):
@@ -284,7 +265,6 @@ class VoxelGrid3D:
                 err_y += 2 * dy
 
     def decay_stale(self, current_time, persistence_s):
-        """Clear occupied voxels not refreshed within persistence window."""
         occupied = self.cost >= 100.0
         if not occupied.any():
             return
@@ -294,11 +274,9 @@ class VoxelGrid3D:
         self.source[stale] = 0
 
     def get_occupied_with_source(self):
-        """Return (Nx3 points, Nx1 source_ids) for occupied voxels."""
         occupied = np.argwhere(self.cost >= 100.0)
         if occupied.shape[0] == 0:
             return np.empty((0, 3), dtype=np.float32), np.empty(0, dtype=np.uint8)
-
         centers = np.column_stack([
             (occupied[:, 0] + 0.5) * self.resolution - self.size_x / 2.0,
             (occupied[:, 1] + 0.5) * self.resolution - self.size_y / 2.0,
@@ -308,18 +286,11 @@ class VoxelGrid3D:
         return centers, sources
 
     def compute_inflation(self, radius_m, scaling_factor):
-        """
-        Compute inflated cost grid using 3D distance transform.
-        Returns float32 (nx, ny, nz) with costs [0..100].
-        Occupied cells = 100, cells within radius get exponential decay.
-        """
         occupied = (self.cost >= 100.0).astype(np.float32)
         if occupied.sum() == 0:
             return np.zeros_like(self.cost)
-
         free_mask = 1.0 - occupied
         dist = distance_transform_edt(free_mask, sampling=self.resolution)
-
         inflated = np.zeros_like(self.cost)
         within_radius = dist <= radius_m
         inflated[within_radius] = 100.0 * np.exp(
@@ -327,34 +298,44 @@ class VoxelGrid3D:
         inflated[occupied > 0] = 100.0
         return inflated
 
+    def get_inflated_as_int8(self, inflated_grid):
+        """
+        Convert the 3D inflated grid to int8 for publishing.
+
+        Values:
+          -1  = unknown (never observed)
+           0  = free (observed clear)
+          1-100 = cost (inflation gradient or occupied)
+
+        The raw cost grid is used to distinguish unknown from free:
+        if a voxel has cost < 0 (unknown) AND no inflation, it stays -1.
+        """
+        result = np.full(
+            (self.nx, self.ny, self.nz), -1, dtype=np.int8)
+        # Cells that have been observed (cost >= 0) but no inflation = free
+        observed = self.cost >= 0.0
+        result[observed & (inflated_grid < 1.0)] = 0
+        # Cells with inflation cost
+        has_cost = observed & (inflated_grid >= 1.0)
+        result[has_cost] = np.clip(
+            inflated_grid[has_cost], 1, 100).astype(np.int8)
+        return result
+
     def project_to_2d_inflated(self, inflated_grid, height_m, band_m):
-        """
-        Project an inflated 3D grid to 2D OccupancyGrid.
-        Takes the MAX inflated cost in the height band.
-        Returns (nx, ny) int8 array.
-        """
         z_min = height_m - band_m / 2.0 + self.size_z / 2.0
         z_max = height_m + band_m / 2.0 + self.size_z / 2.0
         iz_min = max(0, int(z_min / self.resolution))
         iz_max = min(self.nz, int(z_max / self.resolution) + 1)
-
         if iz_min >= iz_max:
             return np.full((self.nx, self.ny), -1, dtype=np.int8)
-
         slice_3d = inflated_grid[:, :, iz_min:iz_max]
         max_cost = np.max(slice_3d, axis=2)
-
-        # Also check the raw cost grid to identify unknown vs free
         raw_slice = self.cost[:, :, iz_min:iz_max]
         has_any_data = np.any(raw_slice >= 0.0, axis=2)
-
         result = np.full((self.nx, self.ny), -1, dtype=np.int8)
-        # Cells with data but no inflation cost = free
         result[has_any_data & (max_cost < 1.0)] = 0
-        # Cells with inflation cost = that cost (clamped to int8)
         has_cost = has_any_data & (max_cost >= 1.0)
         result[has_cost] = np.clip(max_cost[has_cost], 1, 100).astype(np.int8)
-
         return result
 
 
@@ -380,10 +361,15 @@ class LocalCostmap3DNode(Node):
         self.declare_parameter('publish.costmap_topic', '/pegasus/local_costmap')
         self.declare_parameter('publish.inflated_topic', '/pegasus/local_costmap_inflated')
         self.declare_parameter('publish.marker_topic', '/pegasus/local_costmap_markers')
+        self.declare_parameter('publish.marker_use_latest_tf', True)
+        self.declare_parameter('publish.marker_empty_hold_s', 0.5)
         self.declare_parameter('publish.publish_2d_projection', True)
         self.declare_parameter('publish.projection_topic', '/pegasus/local_costmap_2d')
         self.declare_parameter('publish.projection_height_m', 0.0)
         self.declare_parameter('publish.metadata_topic', '/pegasus/costmap_metadata')
+        self.declare_parameter('publish.publish_3d_grid', True)
+        self.declare_parameter('publish.grid_3d_topic', '/pegasus/local_costmap_3d_grid')
+        self.declare_parameter('publish.grid_3d_rate_hz', 5.0)
 
         size_x = self.get_parameter('costmap.size_x_m').value
         size_y = self.get_parameter('costmap.size_y_m').value
@@ -399,32 +385,37 @@ class LocalCostmap3DNode(Node):
         costmap_topic = self.get_parameter('publish.costmap_topic').value
         inflated_topic = self.get_parameter('publish.inflated_topic').value
         marker_topic = self.get_parameter('publish.marker_topic').value
+        self.marker_use_latest_tf = self.get_parameter('publish.marker_use_latest_tf').value
+        self.marker_empty_hold_s = self.get_parameter('publish.marker_empty_hold_s').value
         self.pub_2d = self.get_parameter('publish.publish_2d_projection').value
         proj_topic = self.get_parameter('publish.projection_topic').value
         self.proj_height = self.get_parameter('publish.projection_height_m').value
         metadata_topic = self.get_parameter('publish.metadata_topic').value
+        self.pub_3d_grid = self.get_parameter('publish.publish_3d_grid').value
+        grid_3d_topic = self.get_parameter('publish.grid_3d_topic').value
+        grid_3d_hz = self.get_parameter('publish.grid_3d_rate_hz').value
 
         # ── Voxel Grid ──
         self.voxel_grid = VoxelGrid3D(size_x, size_y, size_z, resolution)
         self.lock = threading.Lock()
 
         self.get_logger().info(
-            f'3D Costmap v2: {self.voxel_grid.nx}x{self.voxel_grid.ny}x'
+            f'3D Costmap v2.4: {self.voxel_grid.nx}x{self.voxel_grid.ny}x'
             f'{self.voxel_grid.nz} voxels @ {resolution}m '
             f'({size_x}x{size_y}x{size_z}m) '
-            f'raycast={self.raycasting_enabled}')
+            f'raycast={self.raycasting_enabled} '
+            f'pub_3d_grid={self.pub_3d_grid}')
 
         # ── Sensor state ──
         self.lidar_healthy = False
         self.zed_healthy = False
         self.sensor_mode = "all_degraded"
-
-        # ── Velocity tracking for adaptive decay ──
         self.current_speed = 0.0
-
-        # ── Sensor origins for raycasting ──
-        self.lidar_origin = None   # (3,) numpy array in base_link
+        self.lidar_origin = None
         self.zed_origin = None
+        self.last_marker_points = np.empty((0, 3), dtype=np.float32)
+        self.last_marker_sources = np.empty(0, dtype=np.uint8)
+        self.last_marker_update_s = 0.0
 
         # ── Subscribers ──
         sensor_qos = QoSProfile(
@@ -460,13 +451,20 @@ class LocalCostmap3DNode(Node):
         if self.pub_2d:
             self.grid2d_pub = self.create_publisher(OccupancyGrid, proj_topic, 10)
 
+        # NEW v2.4: 3D grid publisher for D* Lite
+        if self.pub_3d_grid:
+            self.grid3d_pub = self.create_publisher(
+                Int8MultiArray, grid_3d_topic, 10)
+            self.grid3d_timer = self.create_timer(
+                1.0 / grid_3d_hz, self.publish_3d_grid)
+
         # ── Timers ──
         self.publish_timer = self.create_timer(1.0 / pub_hz, self.publish_costmap)
         self.decay_timer = self.create_timer(1.0 / decay_hz, self.decay_stale_voxels)
         self.status_timer = self.create_timer(0.5, self.publish_sensor_status)
         self.metadata_timer = self.create_timer(1.0, self.publish_metadata)
 
-        self.get_logger().info('3D Local Costmap Node v2 initialized')
+        self.get_logger().info('3D Local Costmap Node v2.4 initialized')
 
     # ── Sensor origin callbacks ──────────────────────────────────
 
@@ -486,8 +484,6 @@ class LocalCostmap3DNode(Node):
             return
         now = self.get_clock().now().nanoseconds / 1e9
         with self.lock:
-            # Raycast first (marks free), then insert obstacles (marks occupied)
-            # Order matters: obstacles overwrite free along the last voxel
             if self.raycasting_enabled and self.lidar_origin is not None:
                 self.voxel_grid.mark_free_along_rays(
                     self.lidar_origin, points, now)
@@ -527,11 +523,9 @@ class LocalCostmap3DNode(Node):
             self.sensor_mode = "camera_only"
         else:
             self.sensor_mode = "all_degraded"
-
         msg = String()
         msg.data = self.sensor_mode
         self.status_pub.publish(msg)
-
         if self.sensor_mode != "nominal":
             self.get_logger().warn(
                 f'Sensor mode: {self.sensor_mode}',
@@ -540,23 +534,13 @@ class LocalCostmap3DNode(Node):
     # ── Speed-adaptive decay ─────────────────────────────────────
 
     def decay_stale_voxels(self):
-        """
-        Decay with speed-adaptive persistence.
-
-        At rest (speed ≈ 0): use full base_persistence (e.g. 2.0s)
-        At speed: persistence = max_ghost_distance / speed
-          so ghost trail never exceeds max_ghost_distance meters.
-        """
         now = self.get_clock().now().nanoseconds / 1e9
-
         if self.current_speed > 0.5:
-            # Clamp: never shorter than 0.1s, never longer than base
             speed_persistence = self.max_ghost_dist / self.current_speed
             effective_persistence = max(0.1, min(
                 speed_persistence, self.base_persistence))
         else:
             effective_persistence = self.base_persistence
-
         with self.lock:
             self.voxel_grid.decay_stale(now, effective_persistence)
 
@@ -570,86 +554,124 @@ class LocalCostmap3DNode(Node):
             inflated_grid = self.voxel_grid.compute_inflation(
                 self.inflation_radius, self.inflation_scaling)
 
-        if points.shape[0] == 0:
-            self._publish_empty_markers(stamp)
-            return
+        # 1. Raw occupied voxels
+        if points.shape[0] > 0:
+            self.costmap_pub.publish(
+                xyz_to_pointcloud2(points, 'base_link', stamp))
 
-        # 1. Raw occupied voxels (for obstacle avoidance — precise positions)
-        self.costmap_pub.publish(
-            xyz_to_pointcloud2(points, 'base_link', stamp))
-
-        # 2. Inflated costmap as PointCloud2 (for path planner)
-        #    Include all voxels with inflated cost > 0
+        # 2. Inflated costmap as PointCloud2
         self._publish_inflated_cloud(inflated_grid, stamp)
 
-        # 3. RViz markers (colored by source)
-        self._publish_markers(points, sources, stamp)
+        # 3. RViz markers (always publish, even when empty)
+        now_s = self.get_clock().now().nanoseconds / 1e9
+        marker_points = points
+        marker_sources = sources
+        if points.shape[0] > 0:
+            self.last_marker_points = points.copy()
+            self.last_marker_sources = sources.copy()
+            self.last_marker_update_s = now_s
+        elif (self.last_marker_points.shape[0] > 0 and
+              (now_s - self.last_marker_update_s) <= self.marker_empty_hold_s):
+            marker_points = self.last_marker_points
+            marker_sources = self.last_marker_sources
 
-        # 4. 2D inflated projection (for A* / D* Lite)
+        self._publish_markers(marker_points, marker_sources, stamp)
+
+        # 4. 2D inflated projection
         if self.pub_2d:
             self._publish_2d_inflated(inflated_grid, stamp)
 
+    def publish_3d_grid(self):
+        """
+        NEW v2.4: Publish the full 3D inflated voxel grid as Int8MultiArray.
+
+        Layout: flat row-major array of shape (nx, ny, nz).
+        Index mapping: grid[ix, iy, iz] = data[ix * ny * nz + iy * nz + iz]
+
+        Values: -1=unknown, 0=free, 1-100=cost (inflation gradient / occupied)
+
+        D* Lite subscribes to this topic and uses it as its 3D search graph.
+        Grid metadata (dimensions, resolution, origin offsets) is published
+        on /pegasus/costmap_metadata as JSON.
+        """
+        with self.lock:
+            inflated_grid = self.voxel_grid.compute_inflation(
+                self.inflation_radius, self.inflation_scaling)
+            grid_int8 = self.voxel_grid.get_inflated_as_int8(inflated_grid)
+
+        msg = Int8MultiArray()
+        msg.layout.dim = [
+            MultiArrayDimension(label='x', size=self.voxel_grid.nx,
+                                stride=self.voxel_grid.nx * self.voxel_grid.ny * self.voxel_grid.nz),
+            MultiArrayDimension(label='y', size=self.voxel_grid.ny,
+                                stride=self.voxel_grid.ny * self.voxel_grid.nz),
+            MultiArrayDimension(label='z', size=self.voxel_grid.nz,
+                                stride=self.voxel_grid.nz),
+        ]
+        msg.layout.data_offset = 0
+        msg.data = grid_int8.ravel().tolist()
+
+        self.grid3d_pub.publish(msg)
+
     def _publish_inflated_cloud(self, inflated_grid, stamp):
-        """
-        Publish inflated costmap as PointCloud2 with cost encoded in Z.
-        The planner reads (x, y, z) as position and uses a separate
-        channel for cost. Here we publish all cells with cost > 10
-        (above noise threshold) so the planner can see the safety buffer.
-        """
         threshold = 10.0
         inflated_voxels = np.argwhere(inflated_grid > threshold)
-
         if inflated_voxels.shape[0] == 0:
             return
-
         res = self.voxel_grid.resolution
         centers = np.column_stack([
             (inflated_voxels[:, 0] + 0.5) * res - self.voxel_grid.size_x / 2.0,
             (inflated_voxels[:, 1] + 0.5) * res - self.voxel_grid.size_y / 2.0,
             (inflated_voxels[:, 2] + 0.5) * res - self.voxel_grid.size_z / 2.0,
         ]).astype(np.float32)
-
+        costs = inflated_grid[
+            inflated_voxels[:, 0],
+            inflated_voxels[:, 1],
+            inflated_voxels[:, 2],
+        ]
         self.inflated_pub.publish(
-            xyz_to_pointcloud2(centers, 'base_link', stamp))
+            xyz_cost_to_pointcloud2(centers, costs, 'base_link', stamp))
 
     def _publish_markers(self, points, sources, stamp):
         marker_array = MarkerArray()
+
         marker = Marker()
-        marker.header = Header(stamp=stamp, frame_id='base_link')
+        marker_stamp = Time() if self.marker_use_latest_tf else stamp
+        marker.header = Header(stamp=marker_stamp, frame_id='base_link')
         marker.ns = 'local_costmap_3d'
         marker.id = 0
         marker.type = Marker.CUBE_LIST
         marker.action = Marker.ADD
+        marker.frame_locked = True
         marker.pose.orientation.w = 1.0
         res = self.voxel_grid.resolution
         marker.scale.x = res * 0.9
         marker.scale.y = res * 0.9
         marker.scale.z = res * 0.9
+        if points.shape[0] > 0:
+            z_min = points[:, 2].min()
+            z_max = points[:, 2].max()
+            z_range = max(z_max - z_min, 0.1)
+            for i in range(points.shape[0]):
+                marker.points.append(Point(
+                    x=float(points[i, 0]), y=float(points[i, 1]),
+                    z=float(points[i, 2])))
+                alpha = 0.4 + 0.6 * (points[i, 2] - z_min) / z_range
+                src = sources[i]
+                if src == 1:
+                    c = ColorRGBA(r=1.0, g=0.2, b=0.2, a=float(alpha))
+                elif src == 2:
+                    c = ColorRGBA(r=0.2, g=0.4, b=1.0, a=float(alpha))
+                elif src == 3:
+                    c = ColorRGBA(r=0.2, g=1.0, b=0.2, a=float(alpha))
+                else:
+                    c = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.3)
+                marker.colors.append(c)
 
-        z_min = points[:, 2].min()
-        z_max = points[:, 2].max()
-        z_range = max(z_max - z_min, 0.1)
-
-        for i in range(points.shape[0]):
-            marker.points.append(Point(
-                x=float(points[i, 0]),
-                y=float(points[i, 1]),
-                z=float(points[i, 2])))
-
-            alpha = 0.4 + 0.6 * (points[i, 2] - z_min) / z_range
-            src = sources[i]
-            if src == 1:
-                c = ColorRGBA(r=1.0, g=0.2, b=0.2, a=float(alpha))
-            elif src == 2:
-                c = ColorRGBA(r=0.2, g=0.4, b=1.0, a=float(alpha))
-            elif src == 3:
-                c = ColorRGBA(r=0.2, g=1.0, b=0.2, a=float(alpha))
-            else:
-                c = ColorRGBA(r=0.5, g=0.5, b=0.5, a=0.3)
-            marker.colors.append(c)
-
+        # Keep marker persistent and update it every publish cycle.
+        # Empty CUBE_LIST clears the display without DELETEALL-induced flicker.
         marker.lifetime.sec = 0
-        marker.lifetime.nanosec = 200_000_000
+        marker.lifetime.nanosec = 0
         marker_array.markers.append(marker)
         self.marker_pub.publish(marker_array)
 
@@ -664,11 +686,9 @@ class LocalCostmap3DNode(Node):
         self.marker_pub.publish(marker_array)
 
     def _publish_2d_inflated(self, inflated_grid, stamp):
-        """Publish inflated 2D projection for A*/D* Lite planners."""
         with self.lock:
             grid_2d = self.voxel_grid.project_to_2d_inflated(
                 inflated_grid, self.proj_height, band_m=2.0)
-
         occ_msg = OccupancyGrid()
         occ_msg.header = Header(stamp=stamp, frame_id='base_link')
         occ_msg.info.resolution = self.voxel_grid.resolution
@@ -685,15 +705,10 @@ class LocalCostmap3DNode(Node):
     # ── Metadata ─────────────────────────────────────────────────
 
     def publish_metadata(self):
-        """
-        Publish costmap metadata as JSON so downstream nodes can
-        configure themselves without hardcoding grid parameters.
-        """
         vg = self.voxel_grid
         occupied_count = int((vg.cost >= 100.0).sum())
         free_count = int((vg.cost == 0.0).sum())
         unknown_count = int((vg.cost < 0.0).sum())
-
         metadata = {
             "size_x_m": vg.size_x,
             "size_y_m": vg.size_y,
@@ -710,8 +725,8 @@ class LocalCostmap3DNode(Node):
             "free_voxels": free_count,
             "unknown_voxels": unknown_count,
             "raycasting_enabled": self.raycasting_enabled,
+            "publish_3d_grid": self.pub_3d_grid,
         }
-
         msg = String()
         msg.data = json.dumps(metadata)
         self.metadata_pub.publish(msg)

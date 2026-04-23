@@ -1,0 +1,25 @@
+astar_planner:
+  ros__parameters:
+    # ── A* Algorithm ──────────────────────────────────────────────────────────
+    grid_resolution: 0.5          # metres per cell (must match costmap resolution)
+    heuristic_weight: 1.0         # 1.0 = optimal A*; >1.0 = faster but sub-optimal
+    max_iterations: 10000         # hard cap on node expansions
+    diagonal_movement: true        # 8-connected grid (allows diagonal moves)
+    cost_penalty_factor: 15.0     # higher → paths kept further from obstacles
+
+    # ── Costmap interface ─────────────────────────────────────────────────────
+    lethal_cost_threshold: 70     # cells >= this value are impassable (must match
+                                  # costmap_lethal_cost in integrated_system.yaml)
+    unknown_cell_cost: 70         # cost assigned to unknown (-1) cells
+
+    # ── Replanning ────────────────────────────────────────────────────────────
+    planning_frequency: 2.0       # Hz — how often the planner checks for replanning
+    path_deviation_threshold_m: 5.0  # trigger replan if UAV drifts this far from path
+
+    # ── Goal handling ─────────────────────────────────────────────────────────
+    goal_tolerance_m: 3.0         # goal acceptance radius (metres)
+
+    # ── UAV flight constraints (15ft wingspan) ────────────────────────────────
+    safety_margin: 3.0            # minimum clearance from obstacles (metres)
+    min_altitude_m: 5.0           # minimum altitude AGL (metres)
+    max_altitude_m: 120.0         # maximum altitude AGL (metres)

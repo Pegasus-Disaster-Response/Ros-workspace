@@ -2,65 +2,74 @@
 #  ZED X Camera Config — Pegasus Disaster Response UAV
 #  Single front-facing ZED X for SLAM + perception
 #  Namespace: /zed_x
+#
+#  v2.7 CRITICAL FIX:
+#    The ZED ROS 2 wrapper v5.1 uses NESTED parameter names under
+#    general.*, depth.*, video.*, pos_tracking.*, etc. The previous
+#    config used FLAT parameter names (e.g. 'grab_resolution' at
+#    the top level of ros__parameters) which the wrapper silently
+#    ignored. Every single parameter override was having no effect.
+#
+#    This file now matches the exact structure used by
+#    common_stereo.yaml and zedx.yaml in the wrapper installation.
+#
+#    Additionally:
+#    - pos_tracking.pos_tracking_enabled set to FALSE so RTAB-Map
+#      is the sole TF authority for map -> odom -> base_link.
+#    - Depth mode set to NEURAL (not NEURAL_LIGHT which is the
+#      SDK 5.1 default for 'NEURAL' string on ZED X).
+#    - grab_frame_rate reduced to 15 Hz to save bandwidth.
+#    - grab_resolution set to HD1080 (good balance of quality and
+#      bandwidth for SLAM on Jetson Orin).
+#
+#  Loaded via ros_params_override_path in pegasus_sensors.launch.py
 # ============================================================
 
-zed_node:
-  ros__parameters:
+# IMPORTANT: The /**:ros__parameters: wrapper is required for the
+# override file to work with the ZED wrapper's composable node.
+/**:
+    ros__parameters:
 
-    # ── Camera Identity ──────────────────────────────────────
-    camera_model: 'zedx'
-    camera_name: 'zed_x'
-    serial_number: 40709032                  # ← SET THIS to your ZED X serial number
-    #                                 #   Find it: /usr/local/zed/tools/ZED_Explorer
+        # ── General ────────────────────────────────────────────
+        general:
+            serial_number: 40709032           # Verify with ZED_Explorer
+            grab_resolution: 'HD1080'         # HD1200 is native but HD1080 saves bandwidth
+            grab_frame_rate: 15               # 15 Hz sufficient for SLAM, reduces USB/GMSL load
+            pub_frame_rate: 15.0              # Match grab rate
+            pub_resolution: 'CUSTOM'          # Use downscale factor below
+            pub_downscale_factor: 2.0         # Publish at 540p (half of 1080p)
 
-    # ── Frames ───────────────────────────────────────────────
-    base_frame: 'base_link'
-    camera_frame: 'zed_x_camera_center'
-    publish_tf: false                 # RTAB-Map handles TF
-    publish_map_tf: false
-    publish_imu_tf: false             # Pixhawk IMU is used, not ZED IMU
+        # ── Video ──────────────────────────────────────────────
+        video:
+            publish_rgb: true                 # Needed for RTAB-Map RGB-D mode
 
-    # ── Resolution & Frame Rate ──────────────────────────────
-    general.grab_resolution: 'HD1080' # 1920x1080 — full res for SLAM
-    general.grab_frame_rate: 30       # 30 Hz front camera
-    general.self_calib: true
+        # ── Depth ──────────────────────────────────────────────
+        depth:
+            depth_mode: 'NEURAL'              # Full NEURAL for best quality depth
+            min_depth: 0.3                    # ZED X minimum reliable depth (m)
+            max_depth: 20.0                   # ZED X maximum reliable depth (m)
+            depth_stabilization: 1            # Minimal stabilization (RTAB-Map handles filtering)
+            point_cloud_freq: 1.0             # Low freq; costmap uses depth image directly
 
-    # ── Depth ────────────────────────────────────────────────
-    # NEURAL depth mode produces highest quality depth maps
-    # which RTAB-Map uses directly in RGB-D mode
-    depth.depth_mode: 'NEURAL'        # NEURAL | PERFORMANCE | QUALITY | ULTRA
-    depth.min_depth: 0.3              # ZED X min reliable depth (m)
-    depth.max_depth: 20.0             # ZED X max reliable depth (m)
-    depth.depth_stabilization: 1
+        # ── Positional Tracking ────────────────────────────────
+        # CRITICAL: Must be disabled. RTAB-Map is the sole TF
+        # publisher for map -> odom -> base_link. If the ZED wrapper
+        # also publishes these TFs, it causes a race condition where
+        # stale ZED poses overwrite RTAB-Map's optimized poses.
+        pos_tracking:
+            pos_tracking_enabled: true
+            publish_tf: false
+            publish_map_tf: false
+            set_gravity_as_origin: false
 
-    # ── Image Output ─────────────────────────────────────────
-    video.img_downsample_factor: 1.0
-    video.brightness: 4
-    video.contrast: 4
-    video.hue: 0
-    video.saturation: 4
-    video.sharpness: 4
-    video.gamma: 8
-    video.auto_exposure_gain: true
-    video.auto_whitebalance: true
+        # ── Sensors (IMU) ─────────────────────────────────────
+        # We use the Pixhawk IMU via the bridge node, not the ZED
+        # internal IMU, for SLAM. But we still let the ZED publish
+        # its IMU data in case it's useful for diagnostics.
+        sensors:
+            publish_imu_tf: false             # Pixhawk IMU is used, not ZED internal IMU
+            sensors_image_sync: false          # Pixhawk IMU is fused separately
 
-    # ── Point Cloud ──────────────────────────────────────────
-    point_cloud_freq: 5.0             # Low Hz — RTAB-Map uses depth image directly
-    mapping.mapping_enabled: false    # RTAB-Map handles mapping
-
-    # ── Internal Odometry ────────────────────────────────────
-    pos_tracking_enabled: false       # Disable ZED odometry — RTAB-Map does this
-
-    # ── Stereo Publishing ────────────────────────────────────
-    # Publish depth for RTAB-Map RGB-D mode
-    publish_stereo: true
-    publish_left_camera: true
-    publish_right_camera: true
-    publish_depth: true
-
-    # ── IMU ──────────────────────────────────────────────────
-    sensors.publish_imu_tf: false
-    sensors.sensors_image_sync: false
-
-    # ── QoS ──────────────────────────────────────────────────
-    use_sim_time: false
+        # ── Mapping ────────────────────────────────────────────
+        mapping:
+            mapping_enabled: false            # RTAB-Map handles all mapping

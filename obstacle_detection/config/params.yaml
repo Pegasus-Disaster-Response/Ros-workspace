@@ -1,0 +1,35 @@
+obstacle_detector:
+  ros__parameters:
+    # ── Detection box (15ft wingspan UAV) ─────────────────────────────────
+    danger_distance: 80.0     # Outer detection range (meters)
+    detection_width: 9.0      # Horizontal detection ±Y (meters) — 15ft span + 3m margin/side
+    detection_height: 6.0     # Vertical detection ±Z (meters)
+    min_distance: 2.0         # Ignore points closer than this (meters)
+    obstacle_inflation: 3.0   # Safety inflation applied to all distances (meters)
+
+    # ── Topic configuration ───────────────────────────────────────────────
+    lidar_topic: "/lidar/points"
+
+    # ── Performance ───────────────────────────────────────────────────────
+    update_rate: 10.0         # Processing rate (Hz)
+
+    # ── Kalman tracking ───────────────────────────────────────────────────
+    kalman_dt: 0.1            # Filter time step (s) — must match 1/update_rate
+    max_track_age: 5          # Frames before pruning a stale track
+    min_track_hits: 2         # Detections required before track is confirmed
+    association_dist: 5.0     # Max metres for detection-to-track association
+
+    # ── Clustering (DBSCAN-lite) ──────────────────────────────────────────
+    cluster_eps: 2.0          # Neighbourhood radius (meters)
+    cluster_min_pts: 3        # Minimum points to form a cluster
+
+    # ── Zone-based avoidance thresholds ──────────────────────────────────
+    #   Zone 1 CRITICAL  0 – zone_critical_m  → EMERGENCY_HOVER
+    #   Zone 2 DANGER    zone_critical – zone_danger  → HARD_AVOID
+    #   Zone 3 WARNING   zone_danger  – zone_warning  → REROUTE
+    #   Zone 4 CAUTION   zone_warning – zone_caution  → ADJUST_HEADING
+    #   Zone 5 SAFE      zone_caution – ∞             → NORMAL_FLIGHT
+    zone_critical_m: 1.0
+    zone_danger_m:   3.0
+    zone_warning_m:  6.0
+    zone_caution_m: 10.0

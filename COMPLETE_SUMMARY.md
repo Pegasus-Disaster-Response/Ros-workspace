@@ -1,306 +1,352 @@
 # Pegasus ROS — Quick Reference & Development Roadmap
 
-**Version:** 2.3.0
+**Version:** 2.7.0
 **Last Updated:** March 2026
 
 ---
 
 ## Changelog
 
+### v2.7 (March 2026)
+- **ZED X wrapper rebuild** — Rebuilt the ZED ROS 2 wrapper in `~/camera_ws` against ZED SDK 5.2.0. The previous wrapper was built for SDK 5.1.0, which caused an `enable_right_side_measure` crash and a gravity alignment stall that prevented the camera from publishing any frames. Also cloned the new `zed-ros2-description` package that the v5.2 wrapper requires as a separate dependency.
+- **ZED X config rewrite** — `zed_x.yaml` completely rewritten to use the correct nested YAML parameter structure (`general.*`, `depth.*`, `pos_tracking.*`, `sensors.*`, `mapping.*`) matching the wrapper's `common_stereo.yaml` format. The previous config used flat parameter names at the top level of `ros__parameters` which the wrapper silently ignored, resulting in no overrides taking effect.
+- **ZED X topic name update** — The v5.2 wrapper publishes RGB on `/zed_x/zed_node/rgb/color/rect/image` (was `/rgb/image_rect_color`) and camera info on `/zed_x/zed_node/rgb/color/rect/camera_info` (was `/rgb/camera_info`). Updated topic references in `pegasus_slam.launch.py`, `p110_gazebo_bridge_launch.py`, `zed_depth_costmap_layer_node.py`, and `local_costmap.yaml`.
+- **TF tree fix** — Static TF from `base_link` now targets `zed_x_camera_link` (the ZED URDF root frame) instead of `zed_x_camera_center`. Z offset adjusted from 0.10 m to 0.084 m to account for the 16 mm offset between `zed_x_camera_link` and `zed_x_camera_center` in the URDF. Previously the TF tree was split into two disconnected trees, causing RTAB-Map to fail with "Could not find a connection between base_link and zed_x_left_camera_frame_optical".
+- **Full multi-sensor SLAM** — Re-enabled `subscribe_rgb: true`, `subscribe_depth: true`, `subscribe_imu: true` in `rtabmap.yaml`. Changed `Grid/Sensor` from `0` (LiDAR only) back to `2` (both LiDAR and depth camera). Re-enabled `Mem/UseOdomGravity: true`. Set `wait_imu_to_init: true` in all three config files (`rtabmap.yaml`, `icp_odometry.yaml`, `rgbd_odometry.yaml`). The `wait_imu_to_init: true` setting is the critical fix: in v2.6.3, `subscribe_imu` was set to `true` but `wait_imu_to_init` was `false`, causing a SIGABRT when ICP tried to use an uninitialized gravity vector. This crash led to all IMU and camera subscriptions being disabled as a workaround.
+- **Database persistence** — Confirmed that the RTAB-Map database at `~/Ros-workspace/maps/pegasus_disaster_map.db` saves and grows during multi-sensor SLAM mapping sessions. The `--delete_db_on_start` fix from v2.6.2 remains in place.
+
+### v2.6 (March 2026)
+- Disaster response simulation world (`disaster_response.sdf`): 200 m × 200 m, 5 challenge zones, VTOL model with simulated VLP-16 + ZED X + IMU
+- setup.py critical fixes (dead entry points, missing configs, missing launch files)
+- SDF BOM fix
+
+### v2.5 (March 2026)
+- PX4 offboard interface (`px4_offboard_node`), SITL launch, offboard config
+
+### v2.4 (March 2026)
+- D* Lite 3D local replanner (26-connected, incremental), MPC trajectory smoother, VTOL dynamics config
+
 ### v2.3 (March 2026)
-- **Fix #1: setup.py** — added explicit `package_dir` mapping for `pegasus_autonomy` module discovery; version bump to 2.3.0
-- **Fix #2: Odometry selector clock** — replaced `time.time()` (wall clock) with `self.get_clock()` (ROS clock) so timeout logic works correctly when `use_sim_time=true`
-- **Fix #3: Odometry YAML namespacing** — created dedicated `icp_odometry.yaml` and `rgbd_odometry.yaml` config files so subscription parameters (`subscribe_scan_cloud`, `subscribe_rgb`, etc.) are under the correct node name. Previously all params were under `rtabmap:` in `rtabmap.yaml`, which doesn't match the odometry node names — so the nodes never actually subscribed to sensor data.
-- **Fix #4: Full launch missing costmap** — `pegasus_full.launch.py` now includes `local_costmap.launch.py`; added `enable_costmap` argument
-- **Fix #5: ICP correspondence distance** — increased `Icp/MaxCorrespondenceDistance` from 0.15 to 1.0. With `Icp/VoxelSize=0.3`, voxel centers are at least 0.3m apart, so the old value (0.15) rejected most valid point correspondences.
-- **Fix #6: ZED camera_info QoS** — changed `zed_depth_costmap_layer_node` camera_info subscriber from RELIABLE to BEST_EFFORT QoS. The ZED wrapper publishes BEST_EFFORT; a RELIABLE subscriber silently fails to receive, so camera intrinsics never arrived and depth processing never started.
-- **Fix #7: RANSAC ground removal** — replaced naive z-threshold ground removal in `lidar_costmap_layer_node` with RANSAC plane fitting. The old method (`points[:, 2] > threshold`) assumed level flight — during pitch/roll the ground plane tilts in base_link frame, causing false obstacles or missed ground removal. New params: `ransac_iterations`, `candidate_z_band_m`.
+- Fixes: setup.py, odom clock, YAML namespace mismatch, ICP params, ZED QoS, RANSAC ground removal
 
 ### v2.2 (March 2026)
-- **A* global planner** — weighted A* on 2D occupancy grids with inflation-aware cost penalties, automatic replanning on path deviation, altitude constraints, and JSON status reporting
-- **SIL test infrastructure** — static map publisher (PGM+YAML), static odom publisher, dedicated test launch file, RViz config with 2D Goal Pose tool
-- **Gazebo test world** — 100×100m disaster environment with buildings, walls, debris, and cylindrical rubble (`pegasus_planning_test.sdf`)
-- **Ground-truth map** — auto-generated occupancy grid from the Gazebo world with 1m obstacle inflation (`planning_test_map.pgm`)
-- **Conditional Gazebo bridge** — `gazebo_planner_test.launch.py` works without `ros_gz_bridge` installed; enable with `use_gazebo:=true`
-- **Updated `pegasus_full.launch.py`** — global planner node included in full system launch
-- **Pillow** added as dependency for map loading
+- A* global planner, static map publisher, SIL test infrastructure, Gazebo test world
 
-### v2.1 (March 2026)
-- **3D local costmap** — rolling voxel grid (40×40×20m) fusing VLP-16 LiDAR + ZED X depth
-- **Individual sensor layers** — lidar_costmap_layer_node and zed_depth_costmap_layer_node run independently
-- **Sensor health monitoring** — automatic degraded mode detection (nominal/lidar_only/camera_only/all_degraded)
-- **3D inflation** — scipy distance_transform_edt for real-time safety buffer computation
-- **Multi-format publishing** — PointCloud2, MarkerArray (color-coded by source), 2D OccupancyGrid projection
-- **python3-scipy** added as dependency
-
-### v2.0 (February 2026)
-- **RTAB-Map built from source** (0.23.x) — apt 0.22.1 removed to avoid database version conflicts
-- **Switched to RGB-D mode** — uses ZED X NEURAL depth instead of stereo disparity matching
-- **LiDAR ICP odometry** — primary odometry from VLP-16 (was stereo visual odometry)
-- **PX4 IMU bridge node** — converts PX4 SensorCombined (FRD) → sensor_msgs/Imu (FLU)
-- **Static TF publishers** — explicit transforms for all sensors relative to base_link
-- **YAML config files** — parameters extracted from launch files into rtabmap.yaml, zed_x.yaml, vlp16.yaml
-- **Mem/UseOdomGravity** — map Z-axis aligned with gravity via IMU
-- **XRCE-DDS agent fix** — runs as ExecuteProcess (snap binary), not as a ROS node
-- **setup_workspace.sh** — reproducible one-script environment setup
+### v2.1 / v2.0
+- 3D voxel costmap with dual-sensor fusion, RTAB-Map from source (v0.23.x), dual odometry, IMU bridge
 
 ---
 
-## How to Use
+## Full Pipeline (v2.7)
 
-### Launch Full System
-```bash
-ros2 launch pegasus_ros pegasus_full.launch.py
+```
+  Goal ──→ A* ──→ D* Lite 3D ──→ MPC ──→ PX4 Offboard ──→ Pixhawk ──→ Motors
+            │         │            │           │
+         grid_map  costmap_3d    /odom    XRCE-DDS
 ```
 
-### Launch Subsystems Individually
-```bash
-# Sensors → SLAM → Costmap → Planner
-ros2 launch pegasus_ros pegasus_sensors.launch.py
-ros2 launch pegasus_ros pegasus_slam.launch.py
-ros2 launch pegasus_ros local_costmap.launch.py
-ros2 launch pegasus_ros path_planner.launch.py
-```
+| Layer | Node | Rate | Input | Output |
+|---|---|---|---|---|
+| Global plan | global_planner_node | on goal | OccupancyGrid | /global_path |
+| Local replan | dstar_lite_node | 5 Hz | 3D voxel grid | /local_path |
+| Trajectory | mpc_trajectory_node | 50 Hz | /local_path + /odom | /trajectory/setpoint |
+| Flight control | px4_offboard_node | 50 Hz | /trajectory/setpoint | /fmu/in/trajectory_setpoint |
 
-### Test A* Planner (No Hardware)
+---
+
+## Quick Start
+
+### Mapping (sensors + SLAM)
+
 ```bash
-# Terminal 1: Launch planner test
+# Terminal 1 — Sensors
 cd ~/Ros-workspace
-rm -rf build/pegasus_ros install/pegasus_ros log
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select pegasus_ros
+source ~/camera_ws/install/setup.bash
 source install/setup.bash
-ros2 launch pegasus_ros gazebo_planner_test.launch.py
+ros2 launch pegasus_ros pegasus_sensors.launch.py fcu_dev:=/dev/ttyUSB0
 
-# Terminal 2: Send goal
+# Terminal 2 — SLAM
+cd ~/Ros-workspace
+source ~/camera_ws/install/setup.bash
+source install/setup.bash
+ros2 launch pegasus_ros pegasus_slam.launch.py
+
+# Terminal 3 — Monitor
+ros2 topic hz /zed_x/zed_node/rgb/color/rect/image   # ~15 Hz
+ros2 topic hz /velodyne_points                         # ~10 Hz
+ros2 topic hz /pegasus/imu/data                        # ~50 Hz
+ros2 topic hz /odom                                    # should match LiDAR rate
+watch -n 5 ls -la ~/Ros-workspace/maps/pegasus_disaster_map.db
+```
+
+### Localization (reuse existing map)
+
+```bash
+# Terminal 1 — Sensors (same as above)
+# Terminal 2 — SLAM in localization mode
+ros2 launch pegasus_ros pegasus_slam.launch.py localization:=true
+```
+
+### Real Flight (full pipeline)
+
+```bash
+cd ~/Ros-workspace
+source ~/camera_ws/install/setup.bash
+source install/setup.bash
+ros2 launch pegasus_ros pegasus_full.launch.py fcu_dev:=/dev/ttyUSB0
+```
+
+### View Existing Map (offline)
+
+```bash
+rtabmap-databaseViewer ~/Ros-workspace/maps/pegasus_disaster_map.db
+```
+
+### Start Fresh
+
+```bash
+rm ~/Ros-workspace/maps/pegasus_disaster_map.db
+```
+
+### SITL (Gazebo + PX4)
+
+```bash
+# Terminal 1: PX4 SITL + Gazebo
+cd ~/PX4-Autopilot && make px4_sitl gz_x500
+
+# Terminal 2: XRCE-DDS agent (UDP for SITL)
+MicroXRCEAgent udp4 -p 8888
+
+# Terminal 3: Full autonomy stack
 cd ~/Ros-workspace && source install/setup.bash
+ros2 launch pegasus_ros sitl_full.launch.py
+
+# Terminal 4: Send a goal, arm, and engage
 ros2 topic pub --once /pegasus/autonomy/target_waypoint \
-  geometry_msgs/PoseStamped \
-  "{header: {frame_id: 'map'}, pose: {position: {x: 35.0, y: -25.0, z: 10.0}}}"
-
-# Or use RViz "2D Goal Pose" button to click goals on the map
+    geometry_msgs/PoseStamped \
+    "{header: {frame_id: 'map'}, pose: {position: {x: 10.0, y: 5.0, z: 10.0}}}"
+ros2 topic pub --once /pegasus/offboard/arm std_msgs/Bool "{data: true}"
+ros2 topic pub --once /pegasus/offboard/engage std_msgs/Bool "{data: true}"
 ```
 
-### Launch Costmap with One Sensor Disabled
-```bash
-ros2 launch pegasus_ros local_costmap.launch.py enable_lidar:=false
-ros2 launch pegasus_ros local_costmap.launch.py enable_zed:=false
-```
+### A* Planner Test (no hardware)
 
-### Launch Full System Without Costmap
 ```bash
-ros2 launch pegasus_ros pegasus_full.launch.py enable_costmap:=false
-```
-
-### Run Individual Nodes
-```bash
-ros2 run pegasus_ros mission_planner_node
-ros2 run pegasus_ros px4_imu_bridge_node
-ros2 run pegasus_ros odometry_selector_node
-ros2 run pegasus_ros lidar_costmap_layer_node
-ros2 run pegasus_ros zed_depth_costmap_layer_node
-ros2 run pegasus_ros local_costmap_node
-ros2 run pegasus_ros global_planner_node
-ros2 run pegasus_ros static_map_publisher_node --ros-args -p map_yaml_path:=/path/to/map.yaml
+ros2 launch pegasus_ros gazebo_planner_test.launch.py
 ```
 
 ---
 
-## Topic Map
+## Viewing in RViz2
 
-### Sensor Topics
-| Topic | Type | Rate | Source |
-|---|---|---|---|
-| `/velodyne_points` | PointCloud2 | ~10 Hz | VLP-16 driver |
-| `/zed_x/zed_node/rgb/image_rect_color` | Image | ~30 Hz | ZED X driver |
-| `/zed_x/zed_node/depth/depth_registered` | Image (32FC1) | ~30 Hz | ZED X driver |
-| `/zed_x/zed_node/rgb/camera_info` | CameraInfo | ~30 Hz | ZED X driver |
-| `/fmu/out/sensor_combined` | SensorCombined | ~100 Hz | PX4 via XRCE-DDS |
-| `/pegasus/imu/data` | Imu | ~50 Hz | px4_imu_bridge_node |
-
-### SLAM Topics
-| Topic | Type | Rate | Source |
-|---|---|---|---|
-| `/odom_lidar` | Odometry | ~10 Hz | icp_odometry (primary) |
-| `/odom_vision` | Odometry | ~10 Hz | rgbd_odometry (backup) |
-| `/odom` | Odometry | ~10 Hz | odometry_selector (fused output) |
-| `/odom_status` | String | ~10 Hz | odometry_selector |
-| `/rtabmap/grid_map` | OccupancyGrid | ~1 Hz | RTAB-Map |
-| `/rtabmap/cloud_map` | PointCloud2 | ~1 Hz | RTAB-Map |
-| `/tf` (map→odom→base_link) | TF | continuous | RTAB-Map + odometry_selector + static publishers |
-
-### 3D Local Costmap Topics
-| Topic | Type | Rate | Source |
-|---|---|---|---|
-| `/pegasus/lidar_obstacles` | PointCloud2 | ~10 Hz | lidar_costmap_layer |
-| `/pegasus/lidar_origin` | PointStamped | ~10 Hz | lidar_costmap_layer |
-| `/pegasus/lidar_health` | Bool | ~4 Hz | lidar_costmap_layer |
-| `/pegasus/zed_obstacles` | PointCloud2 | ~15-30 Hz | zed_depth_costmap_layer |
-| `/pegasus/zed_origin` | PointStamped | ~15-30 Hz | zed_depth_costmap_layer |
-| `/pegasus/zed_health` | Bool | ~4 Hz | zed_depth_costmap_layer |
-| `/pegasus/local_costmap` | PointCloud2 | ~10 Hz | local_costmap_node |
-| `/pegasus/local_costmap_inflated` | PointCloud2 | ~10 Hz | local_costmap_node |
-| `/pegasus/local_costmap_markers` | MarkerArray | ~10 Hz | local_costmap_node |
-| `/pegasus/local_costmap_2d` | OccupancyGrid | ~10 Hz | local_costmap_node |
-| `/pegasus/sensor_status` | String | ~2 Hz | local_costmap_node |
-| `/pegasus/costmap_metadata` | String (JSON) | ~1 Hz | local_costmap_node |
-
-### Path Planning Topics
-| Topic | Type | Rate | Source |
-|---|---|---|---|
-| `/pegasus/autonomy/target_waypoint` | PoseStamped | on demand | mission planner / RViz / CLI |
-| `/pegasus/path_planner/global_path` | Path | on replan | global_planner_node |
-| `/pegasus/path_planner/status` | String (JSON) | ~1 Hz | global_planner_node |
-| `/pegasus/path_planner/replan_request` | Bool | on demand | external trigger |
-
----
-
-## Configuration Files
-
-| File | Purpose | Key Parameters |
-|---|---|---|
-| `config/rtabmap.yaml` | SLAM tuning (RTAB-Map node only) | ICP settings, grid resolution, loop closure, gravity alignment |
-| `config/icp_odometry.yaml` | ICP LiDAR odometry (primary) | subscribe_scan_cloud, ICP voxel size, correspondence distance |
-| `config/rgbd_odometry.yaml` | RGB-D visual odometry (backup) | subscribe_rgb/depth, feature type, F2M size |
-| `config/zed_x.yaml` | Camera settings | Serial number, depth mode, resolution, frame rate |
-| `config/vlp16.yaml` | LiDAR settings | IP address, min/max range, calibration |
-| `config/local_costmap.yaml` | 3D costmap | Voxel resolution, grid size, sensor ranges, inflation radius, decay rate, RANSAC ground removal, degraded mode thresholds |
-| `config/path_planner.yaml` | A* planner | Heuristic weight, diagonal movement, cost penalty factor, lethal threshold, altitude limits, replan frequency, goal tolerance |
-
-Edit YAML files directly — no rebuild needed (with `--symlink-install`):
-```bash
-nano src/pegasus_ros/config/rtabmap.yaml
-# Changes take effect on next launch
-```
-
----
-
-## Sensor Health & Degraded Modes
-
-The local costmap node monitors both sensor heartbeats and adjusts behavior:
-
-| Mode | LiDAR | ZED | Behavior |
-|---|---|---|---|
-| `nominal` | ✅ | ✅ | Full fusion, standard safety margins |
-| `lidar_only` | ✅ | ❌ | 360° coverage, safety margins ×1.5 |
-| `camera_only` | ❌ | ✅ | Forward cone only, speed limited, RTL after 30s |
-| `all_degraded` | ❌ | ❌ | Emergency loiter, RTL after 60s |
-
-Monitor live: `ros2 topic echo /pegasus/sensor_status`
-
----
-
-## RViz Visualization
+RViz launches automatically with the SLAM launch. To add displays, click "Add" at the bottom of the Displays panel and choose "By topic" to browse available data streams.
 
 ### SLAM Visualization
-```bash
-rviz2 -d $(ros2 pkg prefix pegasus_ros)/share/pegasus_ros/config/rviz_slam.rviz
+
+Set **Fixed Frame** to `map` (top of Displays panel, under Global Options).
+
+| Display Type | Topic | What It Shows |
+|---|---|---|
+| Map | /rtabmap/grid_map | 2D occupancy grid from SLAM |
+| PointCloud2 | /rtabmap/cloud_map | 3D accumulated point cloud |
+| PointCloud2 | /velodyne_points | Live LiDAR scan |
+| Image | /zed_x/zed_node/rgb/color/rect/image | Live RGB camera feed |
+| Image | /zed_x/zed_node/depth/depth_registered | Live depth image |
+| TF | (enable all) | Full coordinate frame tree |
+
+### Local Costmap Visualization
+
+Set **Fixed Frame** to `base_link`.
+
+| Display Type | Topic | What It Shows |
+|---|---|---|
+| PointCloud2 | /pegasus/local_costmap | Raw 3D obstacle voxels |
+| PointCloud2 | /pegasus/local_costmap_inflated | Inflated safety-margin voxels |
+| OccupancyGrid | /pegasus/local_costmap_2d | 2D projection of the costmap |
+
+### Planning Visualization
+
+Set **Fixed Frame** to `map`.
+
+| Display Type | Topic | What It Shows |
+|---|---|---|
+| Path | /pegasus/path_planner/global_path | A* global path |
+| Path | /pegasus/path_planner/local_path | D* Lite local path |
+| Path | /pegasus/trajectory/predicted | MPC predicted trajectory |
+
+### Adding an Image Display
+
+Click "Add", then choose "By display type" (not "By topic"). Select "Image", click OK. In the new Image display properties, set the **Image Topic** to the desired topic. This creates a small image window inside RViz.
+
+---
+
+## TF Frame Tree
+
+```
+map
+ └── odom                              (RTAB-Map)
+      └── base_link                    (odometry_selector)
+           ├── velodyne                (static: 0, 0, 0.25)
+           ├── imu_link                (static: 0, 0, 0)
+           └── zed_x_camera_link       (static: 0.46, 0, 0.084)
+                └── zed_x_camera_center
+                     ├── zed_x_left_camera_frame
+                     │    └── zed_x_left_camera_frame_optical
+                     └── zed_x_right_camera_frame
+                          └── zed_x_right_camera_frame_optical
 ```
 
-### 3D Costmap Visualization
-```bash
-rviz2 -d $(ros2 pkg prefix pegasus_ros)/share/pegasus_ros/config/rviz_local_costmap.rviz
+---
+
+## Workspace Structure
+
+```
+Ros-workspace/src/pegasus_ros/
+├── setup.py                      (v2.7.0)
+├── package.xml
+├── config/
+│   ├── rtabmap.yaml                ← multi-sensor SLAM (LiDAR + ZED + IMU)
+│   ├── icp_odometry.yaml           ← ICP LiDAR odometry + IMU gravity
+│   ├── rgbd_odometry.yaml          ← RGB-D visual odometry + IMU gravity
+│   ├── vlp16.yaml                  ← Velodyne VLP-16
+│   ├── zed_x.yaml                  ← ZED X camera (v5.2 nested param format)
+│   ├── local_costmap.yaml          ← 3D voxel costmap
+│   ├── path_planner.yaml           ← A* global planner
+│   ├── dstar_lite.yaml             ← D* Lite 3D replanner
+│   ├── vtol_dynamics.yaml          ← VTOL dynamics + MPC tuning
+│   ├── px4_offboard.yaml           ← PX4 offboard interface
+│   ├── rviz_slam.rviz
+│   ├── rviz_local_costmap.rviz
+│   └── rviz_planner_test.rviz
+├── launch/
+│   ├── pegasus_full.launch.py
+│   ├── pegasus_sensors.launch.py
+│   ├── pegasus_slam.launch.py
+│   ├── local_costmap.launch.py
+│   ├── path_planner.launch.py
+│   ├── gazebo_planner_test.launch.py
+│   ├── sitl_full.launch.py
+│   ├── p110_gazebo_bridge_launch.py
+│   └── vtol1_gazebo_bridge_launch.py
+├── pegasus_autonomy/
+│   ├── mission_planner_node.py
+│   ├── px4_imu_bridge_node.py
+│   ├── px4_offboard_node.py
+│   ├── odometry_selector_node.py
+│   ├── lidar_costmap_layer_node.py
+│   ├── zed_depth_costmap_layer_node.py
+│   ├── local_costmap_node.py
+│   ├── global_planner_node.py
+│   ├── dstar_lite_node.py
+│   ├── mpc_trajectory_node.py
+│   ├── front_stereo_node.py
+│   ├── static_map_publisher_node.py
+│   └── static_odom_publisher_node.py
+├── worlds/
+├── maps/
+└── test/
 ```
 
-### A* Planner Test Visualization
-```bash
-rviz2 -d $(ros2 pkg prefix pegasus_ros)/share/pegasus_ros/config/rviz_planner_test.rviz
-```
+---
 
-Costmap marker colors in RViz:
-- **Red cubes** — obstacle seen by LiDAR only
-- **Blue cubes** — obstacle seen by ZED X only
-- **Green cubes** — obstacle confirmed by both sensors
-- **Alpha gradient** — higher voxels are more opaque
+## Topic Map (v2.7)
 
-Planner test displays:
-- **Grey/white grid** — free space on the static map
-- **Black shapes** — obstacles (buildings, walls, debris)
-- **Green line** — A* planned path
-- **Axes marker** — UAV position (base_link frame)
+### Sensors
+| Topic | Type | Rate | Source |
+|---|---|---|---|
+| /velodyne_points | PointCloud2 | ~10 Hz | VLP-16 |
+| /zed_x/zed_node/rgb/color/rect/image | Image | ~15 Hz | ZED X |
+| /zed_x/zed_node/rgb/color/rect/camera_info | CameraInfo | ~30 Hz | ZED X |
+| /zed_x/zed_node/depth/depth_registered | Image | ~15 Hz | ZED X |
+| /pegasus/imu/data | Imu | 50 Hz | px4_imu_bridge |
+
+### Odometry
+| Topic | Source | Priority |
+|---|---|---|
+| /odom_lidar | ICP LiDAR odometry | Primary |
+| /odom_vision | RGB-D visual odometry | Backup |
+| /odom | odometry_selector_node | Best available |
+
+### Planning
+| Topic | Type | Rate | Source |
+|---|---|---|---|
+| /pegasus/path_planner/global_path | Path | on replan | A* |
+| /pegasus/path_planner/local_path | Path | ~5 Hz | D* Lite 3D |
+| /pegasus/trajectory/setpoint | PoseStamped | 50 Hz | MPC |
+| /pegasus/trajectory/predicted | Path | 50 Hz | MPC |
+
+### PX4 Offboard
+| Topic | Type | Rate |
+|---|---|---|
+| /fmu/in/trajectory_setpoint | TrajectorySetpoint | 50 Hz |
+| /fmu/in/offboard_control_mode | OffboardControlMode | 50 Hz |
+| /fmu/in/vehicle_command | VehicleCommand | on demand |
+
+### Control
+| Topic | Type | Purpose |
+|---|---|---|
+| /pegasus/offboard/arm | Bool | Arm/disarm |
+| /pegasus/offboard/engage | Bool | Enable/disable offboard |
+| /pegasus/offboard/status | String (JSON) | Status |
+
+### Costmap
+| Topic | Type | Rate |
+|---|---|---|
+| /pegasus/local_costmap | PointCloud2 | 10 Hz |
+| /pegasus/local_costmap_inflated | PointCloud2 | 10 Hz |
+| /pegasus/local_costmap_3d_grid | Int8MultiArray | 5 Hz |
+| /pegasus/local_costmap_2d | OccupancyGrid | 10 Hz |
+| /pegasus/sensor_status | String | 2 Hz |
+
+---
+
+## Hardware Setup
+
+### Pixhawk Cube Orange
+- **Serial:** TELEM2 → YP-05 USB-to-serial → `/dev/ttyUSB0` at 921600 baud
+- **PX4 params:** `MAV_1_CONFIG=0`, `UXRCE_DDS_CFG=102`, `SER_TEL2_BAUD=921600`
+
+### ZED X Camera
+- **GMSL2** via Stereolabs ZED Link Duo capture card
+- **Serial:** 40709032
+- **SDK:** 5.2.0
+- **Workspace:** `~/camera_ws` (separate, contains `zed-ros2-wrapper` + `zed_description`)
+
+### Velodyne VLP-16
+- **Ethernet:** IP 192.168.1.201, host must be on 192.168.1.x subnet
 
 ---
 
 ## What Still Needs to Be Added
 
-### Critical Missing Components
+### Critical
+- ⬜ **VTOL dynamics values** — replace placeholders in vtol_dynamics.yaml with real aircraft data
+- ⬜ **Obstacle avoidance node** — emergency reactive layer below MPC
+- ⬜ **Mission-level safety rules** — speed limiting, battery budget, dead-end escape, progress monitoring
 
-**D* Lite Local Replanner**
-- Status: Not implemented
-- Architecture: Takes A* global path as seed, incrementally replans when costmap changes
-- Inputs: `/pegasus/path_planner/global_path`, `/pegasus/local_costmap_2d` (live updates)
-- Outputs: locally adjusted path for obstacle avoidance node
-
-**MPC Trajectory Smoother**
-- Status: Not implemented
-- Architecture: Converts D* Lite grid path into kinodynamically feasible trajectory
-- Constraints: minimum turn radius, max climb angle, speed envelope, UAV wingspan (15 ft)
-- Outputs: smooth trajectory for PX4 offboard interface
-
-**Obstacle Avoidance Node**
-- Status: Not implemented
-- Will monitor D* Lite path + MPC predicted trajectory against live 3D costmap
-- Feeds costmap change notifications back to D* Lite
-- Emergency bypass to PX4 for immediate collision avoidance
-
-**Flight Controller Interface (Offboard Commands)**
-- Status: Partially implemented (monitoring only)
-- Requires publishing to: `/fmu/in/trajectory_setpoint`, `/fmu/in/vehicle_command`, `/fmu/in/offboard_control_mode`
-- Needs offboard mode manager (arm, switch to offboard, heartbeat at >2 Hz)
-
-**PX4 Mission Waypoint Bridge**
-- Status: Not implemented
-- Reads QGroundControl mission waypoints from PX4 XRCE-DDS topics
-- Converts PX4 NED coordinates to ROS ENU/SLAM map frame
-- Republishes as PoseStamped on `/pegasus/autonomy/target_waypoint`
+### Simulation
+- ⬜ **Custom PX4 VTOL model** — current SITL uses x500 (MC only)
+- ⬜ **Gazebo sensor bridge for disaster_response world**
 
 ### Computer Vision
+- ⬜ Survivor detection (YOLOv8), fire/smoke detection
 
-**Survivor Detection** — YOLOv8 on ZED X camera
-**Fire/Smoke Detection** — color + ML on ZED X camera
-**Structural Damage Assessment** — edge detection + segmentation
+### Testing
+- ⬜ Parametric tests, bag replay, hardware-in-the-loop
 
-### Configuration Needed
-
-**UAV Physical Specs** — mass, inertia, flight envelope in `config/uav_physical_params.yaml`
-**Sensor Calibration** — camera-LiDAR extrinsic calibration procedures
-**Static TF Values** — current values are placeholders, need actual measurements from the UAV
-
----
-
-## Development Priorities
-
-### Phase 1: Core Navigation (Current → Week 6)
-1. ✅ SLAM with multi-sensor fusion (v2.0)
-2. ✅ LiDAR ICP odometry (v2.0)
-3. ✅ IMU bridge for PX4 (v2.0)
-4. ✅ Static TF tree (v2.0)
-5. ✅ 3D local costmap with sensor fusion (v2.1)
-6. ✅ Sensor health monitoring & degraded modes (v2.1)
-7. ✅ A* global path planning (v2.2)
-8. ✅ SIL test infrastructure — static map + RViz (v2.2)
-9. ✅ Bug fixes: odom YAML namespacing, ICP params, QoS, ground removal, full launch (v2.3)
-10. ⬜ D* Lite local replanner
-11. ⬜ MPC trajectory smoothing
-12. ⬜ Obstacle avoidance node
-13. ⬜ PX4 offboard command interface
-
-### Phase 2: Computer Vision (Weeks 7-10)
-1. ⬜ Survivor detection with YOLOv8
-2. ⬜ Fire and smoke detection
-3. ⬜ Integration with mission planner
-
-### Phase 3: Mission Intelligence (Weeks 11-14)
-1. ⬜ Autonomous search patterns
-2. ⬜ Multi-target prioritization
-3. ⬜ Recovery behaviors
-
-### Phase 4: Testing & Validation (Weeks 15-18)
-1. ⬜ Full SITL verification with Gazebo + PX4
-2. ⬜ Hardware-in-the-loop testing
-3. ⬜ Field testing
+### Phase 1 Progress
+1. ✅ SLAM (v2.0)
+2. ✅ 3D costmap (v2.1)
+3. ✅ A* planner (v2.2)
+4. ✅ Bug fixes (v2.3)
+5. ✅ D* Lite 3D + MPC (v2.4)
+6. ✅ PX4 offboard + SITL (v2.5)
+7. ✅ Disaster response world (v2.6)
+8. ✅ Multi-sensor SLAM + ZED X + database persistence (v2.7)
+9. ⬜ Obstacle avoidance node
+10. ⬜ Full SITL with custom VTOL + sensor bridges
 
 ---
 
-**Last Updated**: March 2026
-**Version**: 2.3.0
+**Last Updated:** March 2026
+**Version:** 2.7.0

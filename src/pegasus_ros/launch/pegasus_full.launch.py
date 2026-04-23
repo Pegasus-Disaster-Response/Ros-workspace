@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """
-Pegasus Full System Launch
-Complete system: Sensors + SLAM + Local Costmap + Path Planning
+Pegasus Full System Launch (Real Flight)
+Complete: Sensors + SLAM + Costmap + A* + D* Lite 3D + MPC + PX4 Offboard
 
-v2.3 changes:
-  - Fix #4: Added local_costmap.launch.py include. Previously the
-    full launch did NOT start costmap nodes (lidar_costmap_layer,
-    zed_depth_costmap_layer, local_costmap_node), so the entire
-    3D costmap pipeline was missing from full system runs.
-  - Added enable_costmap argument for disabling costmap in test modes.
+v2.5: Added PX4 offboard interface node.
+      Removed px4_state_subscriber_node (stub — offboard node handles PX4 state).
+
+v2.6.2 changes:
+  - FIX: Added 'database_path' as a top-level launch argument and forwarded
+    it to the SLAM include. Previously pegasus_full.launch.py did not
+    declare or pass database_path, so the SLAM launch always fell back to
+    its own default path — and you could not override the DB location from
+    the full launch command line. Now you can run:
+      ros2 launch pegasus_ros pegasus_full.launch.py \
+        database_path:=/path/to/your/map.db localization:=true
 
 Author: Team Pegasus
-Date: 2026
 """
 
+import os
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
@@ -29,33 +34,38 @@ def generate_launch_description():
 
     # ── Arguments ────────────────────────────────────────────
     use_sim_time_arg = DeclareLaunchArgument(
-        'use_sim_time', default_value='false',
-        description='Use simulation time from Gazebo'
-    )
-
+        'use_sim_time', default_value='false')
     launch_gazebo_bridge_arg = DeclareLaunchArgument(
-        'launch_gazebo_bridge', default_value='false',
-        description='Launch Gazebo bridge for simulation'
-    )
-
+        'launch_gazebo_bridge', default_value='false')
     localization_arg = DeclareLaunchArgument(
-        'localization', default_value='false',
-        description='Localization mode (vs mapping)'
-    )
-
+        'localization', default_value='false')
     rviz_arg = DeclareLaunchArgument(
-        'rviz', default_value='true',
-        description='Launch RViz visualization'
-    )
-
+        'rviz', default_value='true')
     velodyne_ip_arg = DeclareLaunchArgument(
-        'velodyne_ip', default_value='192.168.1.201',
-        description='VLP-16 IP address'
-    )
-
+        'velodyne_ip', default_value='192.168.1.201')
+    fcu_dev_arg = DeclareLaunchArgument(
+        'fcu_dev', default_value='/dev/ttyTHS1',
+        description='Serial device for Pixhawk XRCE-DDS link (TELEM1 on companion)')
+    fcu_baud_arg = DeclareLaunchArgument(
+        'fcu_baud', default_value='921600',
+        description='Baudrate for Pixhawk XRCE-DDS serial connection')
+    enable_zed_arg = DeclareLaunchArgument(
+        'enable_zed', default_value='true',
+        description='Enable ZED X camera')
     enable_costmap_arg = DeclareLaunchArgument(
-        'enable_costmap', default_value='true',
-        description='Launch 3D local costmap nodes'
+        'enable_costmap', default_value='true')
+    enable_offboard_arg = DeclareLaunchArgument(
+        'enable_offboard', default_value='true',
+        description='Enable PX4 offboard interface')
+
+    # FIX v2.6.2: database_path declared here so it can be passed through
+    # to the SLAM child launch and overridden from the command line.
+    database_path_arg = DeclareLaunchArgument(
+        'database_path',
+        default_value=os.path.expanduser(
+            '~/Ros-workspace/maps/pegasus_disaster_map.db'
+        ),
+        description='Path to RTAB-Map database. Must match value in pegasus_slam.launch.py'
     )
 
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -63,104 +73,121 @@ def generate_launch_description():
     localization = LaunchConfiguration('localization')
     rviz = LaunchConfiguration('rviz')
     velodyne_ip = LaunchConfiguration('velodyne_ip')
+    fcu_dev = LaunchConfiguration('fcu_dev')
+    fcu_baud = LaunchConfiguration('fcu_baud')
+    enable_zed = LaunchConfiguration('enable_zed')
     enable_costmap = LaunchConfiguration('enable_costmap')
+    enable_offboard = LaunchConfiguration('enable_offboard')
+    database_path = LaunchConfiguration('database_path')
 
-    # ── Gazebo Bridge (Optional) ─────────────────────────────
+    # ── Gazebo Bridge ────────────────────────────────────────
     gazebo_bridge = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                pegasus_share, 'launch', 'vtol1_gazebo_bridge_launch.py'
-            ])
-        ]),
-        condition=IfCondition(launch_gazebo_bridge),
-    )
+                pegasus_share, 'launch', 'p110_gazebo_bridge_launch.py'])]),
+        condition=IfCondition(launch_gazebo_bridge))
 
-    # ── Sensor Drivers ───────────────────────────────────────
+    # ── Sensors ──────────────────────────────────────────────
     sensors = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                pegasus_share, 'launch', 'pegasus_sensors.launch.py'
-            ])
-        ]),
+                pegasus_share, 'launch', 'pegasus_sensors.launch.py'])]),
         launch_arguments={
             'use_sim_time': use_sim_time,
             'velodyne_ip': velodyne_ip,
-        }.items(),
-    )
+            'fcu_dev': fcu_dev,
+            'fcu_baud': fcu_baud,
+            'enable_zed': enable_zed}.items())
 
-    # ── RTAB-Map SLAM ────────────────────────────────────────
+    # ── SLAM ─────────────────────────────────────────────────
+    # FIX v2.6.2: database_path is now forwarded so the child SLAM
+    # launch uses the same DB location as the full system launch.
     slam = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                pegasus_share, 'launch', 'pegasus_slam.launch.py'
-            ])
-        ]),
+                pegasus_share, 'launch', 'pegasus_slam.launch.py'])]),
         launch_arguments={
             'use_sim_time': use_sim_time,
             'localization': localization,
             'rviz': rviz,
-        }.items(),
-    )
+            'enable_zed': enable_zed,
+            'database_path': database_path}.items())
 
-    # ── 3D Local Costmap ─────────────────────────────────────
-    # Fix #4: This was completely missing from the full launch.
+    # ── Local Costmap ────────────────────────────────────────
     local_costmap = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
-                pegasus_share, 'launch', 'local_costmap.launch.py'
-            ])
-        ]),
-        condition=IfCondition(enable_costmap),
-    )
+                pegasus_share, 'launch', 'local_costmap.launch.py'])]),
+        condition=IfCondition(enable_costmap))
 
-    # ── Mission Planning Node ────────────────────────────────
+    # ── Mission Planner ──────────────────────────────────────
     mission_planner = Node(
         package='pegasus_ros',
         executable='mission_planner_node',
         name='mission_planner_node',
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
-    )
+        parameters=[{'use_sim_time': use_sim_time}])
 
-    # ── PX4 State Subscriber ─────────────────────────────────
-    px4_state_subscriber = Node(
-        package='pegasus_ros',
-        executable='px4_state_subscriber_node',
-        name='px4_state_subscriber_node',
-        output='screen',
-        parameters=[{'use_sim_time': use_sim_time}],
-    )
-
-    # ── Global Path Planner (A*) ──────────────────────────────
+    # ── A* Global Planner ────────────────────────────────────
     planner_config = PathJoinSubstitution([
         pegasus_share, 'config', 'path_planner.yaml'])
-
     global_planner = Node(
         package='pegasus_ros',
         executable='global_planner_node',
         name='global_planner_node',
         output='screen',
-        parameters=[
-            planner_config,
-            {'use_sim_time': use_sim_time},
-        ],
-    )
+        parameters=[planner_config, {'use_sim_time': use_sim_time}])
+
+    # ── D* Lite 3D Replanner ─────────────────────────────────
+    dstar_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'dstar_lite.yaml'])
+    dstar_lite = Node(
+        package='pegasus_ros',
+        executable='dstar_lite_node',
+        name='dstar_lite_node',
+        output='screen',
+        parameters=[dstar_config, {'use_sim_time': use_sim_time}])
+
+    # ── MPC Trajectory Smoother ──────────────────────────────
+    vtol_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'vtol_dynamics.yaml'])
+    mpc = Node(
+        package='pegasus_ros',
+        executable='mpc_trajectory_node',
+        name='mpc_trajectory_node',
+        output='screen',
+        parameters=[vtol_config, {'use_sim_time': use_sim_time}])
+
+    # ── PX4 Offboard Interface ───────────────────────────────
+    offboard_config = PathJoinSubstitution([
+        pegasus_share, 'config', 'px4_offboard.yaml'])
+    offboard = Node(
+        package='pegasus_ros',
+        executable='px4_offboard_node',
+        name='px4_offboard_node',
+        output='screen',
+        parameters=[offboard_config, {'use_sim_time': use_sim_time}],
+        condition=IfCondition(enable_offboard))
 
     return LaunchDescription([
-        # Arguments
         use_sim_time_arg,
         launch_gazebo_bridge_arg,
         localization_arg,
         rviz_arg,
         velodyne_ip_arg,
+        fcu_dev_arg,
+        fcu_baud_arg,
         enable_costmap_arg,
-
-        # Launch components
+        enable_offboard_arg,
+        enable_zed_arg,
+        database_path_arg,      # FIX v2.6.2: added
         gazebo_bridge,
         sensors,
         slam,
-        local_costmap,              # Fix #4: now included
+        local_costmap,
         mission_planner,
-        px4_state_subscriber,
         global_planner,
+        dstar_lite,
+        mpc,
+        offboard,
     ])

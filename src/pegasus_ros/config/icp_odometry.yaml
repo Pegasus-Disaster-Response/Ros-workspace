@@ -2,15 +2,18 @@
 #  ICP LiDAR Odometry Configuration — Pegasus Disaster Response UAV
 #  Loaded by: icp_odometry node in pegasus_slam.launch.py
 #
-#  Fix #3: Subscription parameters must be under the correct node
-#  name (icp_odometry) so the node actually picks them up. Previously
-#  these were only under 'rtabmap:' in rtabmap.yaml, which doesn't
-#  match the icp_odometry node name — so subscribe_scan_cloud was
-#  never set to true and the node wasn't subscribing to LiDAR data.
-#
-#  Fix #5: Icp/MaxCorrespondenceDistance increased from 0.15 to 1.0.
-#  With VoxelSize=0.3, voxel centers are at least 0.3m apart, so a
-#  MaxCorrespondenceDistance of 0.15 would reject most valid matches.
+#  v2.7 changes (Full Multi-Sensor Mode):
+#    - subscribe_imu re-enabled. The SIGABRT crash from v2.6.3 was
+#      caused by subscribe_imu=true + wait_imu_to_init=false. The
+#      ICP node tried to use the gravity vector before the Pixhawk
+#      IMU bridge had published enough data to initialize it.
+#    - wait_imu_to_init set to TRUE. This makes the ICP node wait
+#      for valid IMU orientation data before processing any LiDAR
+#      scans, which prevents the gravity assertion failure.
+#    - Mem/UseOdomGravity re-enabled for IMU-aided odometry.
+#    - The IMU data at 50 Hz from the Pixhawk bridge provides
+#      gravity alignment that significantly reduces ICP drift in
+#      the roll/pitch axes.
 # ============================================================
 
 icp_odometry:
@@ -22,20 +25,25 @@ icp_odometry:
     subscribe_rgb: false
     subscribe_depth: false
     subscribe_stereo: false
+    subscribe_imu: true               # Pixhawk IMU for gravity alignment
 
     # ── ICP Parameters ──────────────────────────────────────
-    Icp/VoxelSize: "0.3"              # Outdoor: 0.3m voxels
-    Icp/MaxCorrespondenceDistance: "1.0"  # Fix #5: was 0.15, must be > VoxelSize
+    Icp/VoxelSize: "0.3"
+    Icp/MaxCorrespondenceDistance: "1.0"
     Icp/PointToPlane: "true"
     Icp/Iterations: "30"
-    Icp/MaxTranslation: "1.0"         # Max 1m motion between frames
+    Icp/MaxTranslation: "2.0"
     Icp/CorrespondenceRatio: "0.01"
 
     # ── Odometry Strategy ───────────────────────────────────
     Odom/Strategy: "0"                # Frame-to-Map
 
+    # ── Gravity ─────────────────────────────────────────────
+    Mem/UseOdomGravity: "true"        # IMU gravity alignment reduces drift
+
     # ── Sync ────────────────────────────────────────────────
     approx_sync: true
     approx_sync_max_interval: 0.5
     queue_size: 30
-    wait_imu_to_init: false
+    wait_imu_to_init: true            # CRITICAL: must be true with subscribe_imu
+                                      # Prevents SIGABRT on uninitialized gravity

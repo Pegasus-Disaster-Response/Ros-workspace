@@ -10,17 +10,27 @@ Changes from v1.0:
   - XRCE-DDS agent uses micro-xrce-dds-agent (run externally, not as ROS node)
   - Parameters loaded from YAML config files
 
+v2.6.3 changes:
+  - FIX: ZED launch argument 'publish_tf' changed from 'true' to 'false'.
+    Having both the ZED wrapper and RTAB-Map publishing TF caused a race
+    condition where the ZED wrapper would overwrite the RTAB-Map
+    map→odom→base_link chain with its own stale transforms, causing
+    the costmap and planner nodes to see inconsistent poses. RTAB-Map
+    is the sole TF authority for map→odom→base_link.
+
 Author: Team Pegasus
 Date: 2026
 """
 
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess
+    DeclareLaunchArgument, IncludeLaunchDescription, ExecuteProcess,
+    RegisterEventHandler
 )
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -62,10 +72,16 @@ def generate_launch_description():
         description='Enable PX4 IMU bridge node'
     )
 
+    cleanup_px4_processes_arg = DeclareLaunchArgument(
+        'cleanup_px4_processes',
+        default_value='true',
+        description='Kill stale XRCE agent/IMU bridge processes before launch'
+    )
+
     fcu_dev_arg = DeclareLaunchArgument(
         'fcu_dev',
-        default_value='/dev/ttyTHS1',
-        description='Serial device for Pixhawk'
+        default_value='/dev/ttyUSB0',
+        description='Serial device for Pixhawk (e.g., /dev/ttyUSB0 or /dev/ttyTHS1)'
     )
 
     fcu_baud_arg = DeclareLaunchArgument(
@@ -80,12 +96,12 @@ def generate_launch_description():
         description='VLP-16 IP address'
     )
 
-    # Get configurations
     use_sim_time = LaunchConfiguration('use_sim_time')
     enable_zed = LaunchConfiguration('enable_zed')
     enable_lidar = LaunchConfiguration('enable_lidar')
     enable_xrce = LaunchConfiguration('enable_xrce')
     enable_imu_bridge = LaunchConfiguration('enable_imu_bridge')
+    cleanup_px4_processes = LaunchConfiguration('cleanup_px4_processes')
     fcu_dev = LaunchConfiguration('fcu_dev')
     fcu_baud = LaunchConfiguration('fcu_baud')
     velodyne_ip = LaunchConfiguration('velodyne_ip')
@@ -107,16 +123,17 @@ def generate_launch_description():
             'camera_name': 'zed_x',
             'node_name': 'zed_node',
 
-            # CRITICAL: Disable ZED's TF — RTAB-Map handles it
+            # FIX v2.6.3: publish_tf must be false — RTAB-Map is the sole
+            # TF publisher for map→odom→base_link. Having the ZED wrapper
+            # also publish TF caused a race condition overwriting RTAB-Map's
+            # transforms with stale ZED odometry transforms.
             'publish_tf': 'false',
             'publish_map_tf': 'false',
             'publish_imu_tf': 'false',
-            'publish_urdf': 'false',
+            'publish_urdf': 'true',
 
-            # Disable ZED's internal odometry — RTAB-Map does this
             'pos_tracking_enabled': 'false',
 
-            # Override with our config
             'ros_params_override_path': PathJoinSubstitution([
                 pegasus_share, 'config', 'zed_x.yaml'
             ]),
@@ -127,7 +144,7 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 2. Velodyne VLP-16 LiDAR (direct node declarations)
+    # 2. Velodyne VLP-16 LiDAR
     # ══════════════════════════════════════════════════════════
 
     vlp16_config = PathJoinSubstitution([
@@ -169,9 +186,16 @@ def generate_launch_description():
 
     # ══════════════════════════════════════════════════════════
     # 3. XRCE-DDS Agent — Pixhawk Bridge
-    #    Uses micro-xrce-dds-agent (installed via snap)
-    #    Runs as a system process, not a ROS node
     # ══════════════════════════════════════════════════════════
+
+    cleanup_px4 = ExecuteProcess(
+        cmd=[
+            'bash', '-lc',
+            "pkill -f 'px4_imu_bridge_node' 2>/dev/null || true"
+        ],
+        output='screen',
+        condition=IfCondition(cleanup_px4_processes),
+    )
 
     xrce_agent = ExecuteProcess(
         cmd=[
@@ -185,8 +209,6 @@ def generate_launch_description():
 
     # ══════════════════════════════════════════════════════════
     # 4. PX4 IMU Bridge Node
-    #    Converts PX4 SensorCombined → sensor_msgs/Imu
-    #    for consumption by RTAB-Map
     # ══════════════════════════════════════════════════════════
 
     px4_imu_bridge = Node(
@@ -202,25 +224,27 @@ def generate_launch_description():
         condition=IfCondition(enable_imu_bridge),
     )
 
+    launch_px4_after_cleanup = RegisterEventHandler(
+        OnProcessExit(
+            target_action=cleanup_px4,
+            on_exit=[xrce_agent, px4_imu_bridge],
+        ),
+        condition=IfCondition(cleanup_px4_processes),
+    )
+
     return LaunchDescription([
-        # Arguments
         use_sim_time_arg,
         enable_zed_arg,
         enable_lidar_arg,
         enable_xrce_arg,
         enable_imu_bridge_arg,
+        cleanup_px4_processes_arg,
         fcu_dev_arg,
         fcu_baud_arg,
         velodyne_ip_arg,
-
-        # Sensors
         zed_x,
         velodyne_driver,
         velodyne_convert,
-
-        # Pixhawk bridge
-        xrce_agent,
-
-        # IMU conversion
-        px4_imu_bridge,
+        cleanup_px4,
+        launch_px4_after_cleanup,
     ])

@@ -1,12 +1,8 @@
 # ============================================================
-#  Pegasus 3D Local Costmap Configuration (v2.3)
+#  Pegasus 3D Local Costmap Configuration (v2.4)
 #  Fuses VLP-16 LiDAR + ZED X depth into a rolling 3D voxel grid
 #
-#  v2.3 changes:
-#    - Fix #7: Added RANSAC ground removal parameters
-#      (ransac_iterations, candidate_z_band_m). The height_m
-#      parameter is now used as the RANSAC distance threshold
-#      instead of a naive z-threshold.
+#  v2.4: Added 3D grid publishing for D* Lite 3D planner.
 # ============================================================
 
 local_costmap_node:
@@ -31,9 +27,9 @@ local_costmap_node:
       voxel_size_m: 0.2
       ground_removal:
         enabled: true
-        height_m: 0.3                # RANSAC distance threshold (m)
-        ransac_iterations: 50        # Fix #7: RANSAC iteration count
-        candidate_z_band_m: 0.5      # Fix #7: z-band above cloud minimum for plane candidates
+        height_m: 0.3
+        ransac_iterations: 50
+        candidate_z_band_m: 0.5
       height_band:
         min_m: -2.0
         max_m: 15.0
@@ -43,8 +39,7 @@ local_costmap_node:
     zed_depth:
       enabled: true
       topic: "/zed_x/zed_node/depth/depth_registered"
-      camera_info_topic: "/zed_x/zed_node/rgb/camera_info"
-      timeout_ms: 500
+      camera_info_topic: "/zed_x/zed_node/rgb/color/rect/camera_info"
       frame_id: "zed_x_camera_center"
       range_min_m: 0.5
       range_max_m: 15.0
@@ -56,8 +51,8 @@ local_costmap_node:
 
     # ── Fusion & Decay ─────────────────────────────────
     fusion:
-      obstacle_persistence_s: 2.0
-      decay_check_hz: 2.0
+      obstacle_persistence_s: 5.0
+      decay_check_hz: 1.0
       max_ghost_distance_m: 3.0
       raycasting_enabled: true
       unknown_cost: -1
@@ -66,7 +61,7 @@ local_costmap_node:
 
     # ── Inflation ──────────────────────────────────────
     inflation:
-      radius_m: 3.0                  # >= half wingspan (15ft/2 ≈ 2.3m)
+      radius_m: 3.0
       cost_scaling_factor: 5.0
 
     # ── Sensor Health / Degraded Modes ─────────────────
@@ -93,3 +88,7 @@ local_costmap_node:
       projection_topic: "/pegasus/local_costmap_2d"
       projection_height_m: 0.0
       metadata_topic: "/pegasus/costmap_metadata"
+      # NEW v2.4: Full 3D grid for D* Lite 3D planner
+      publish_3d_grid: true
+      grid_3d_topic: "/pegasus/local_costmap_3d_grid"
+      grid_3d_rate_hz: 5.0            # Lower than costmap pub rate — 3D grid is large

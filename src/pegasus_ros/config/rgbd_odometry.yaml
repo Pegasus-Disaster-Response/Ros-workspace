@@ -2,10 +2,11 @@
 #  RGB-D Visual Odometry Configuration — Pegasus Disaster Response UAV
 #  Loaded by: rgbd_odometry node in pegasus_slam.launch.py
 #
-#  Fix #3: Subscription parameters under the correct node name
-#  (rgbd_odometry) so the backup visual odometry node actually
-#  subscribes to RGB + depth topics. Previously these lived only
-#  in rtabmap.yaml under 'rtabmap:', which is a different namespace.
+#  v2.7 changes (Full Multi-Sensor Mode):
+#    - Added subscribe_imu=true and wait_imu_to_init=true so the
+#      backup visual odometry also benefits from Pixhawk IMU
+#      gravity alignment.
+#    - Added Mem/UseOdomGravity=true for gravity-aligned poses.
 # ============================================================
 
 rgbd_odometry:
@@ -17,6 +18,7 @@ rgbd_odometry:
     subscribe_scan_cloud: false
     subscribe_scan: false
     subscribe_stereo: false
+    subscribe_imu: true               # Pixhawk IMU for gravity alignment
 
     # ── Odometry Strategy ───────────────────────────────────
     Odom/Strategy: "0"                # Frame-to-Map
@@ -25,8 +27,11 @@ rgbd_odometry:
     Odom/ImageDecimation: "1"         # 1=full res, 2=half
     OdomF2M/MaxSize: "2000"
 
+    # ── Gravity ─────────────────────────────────────────────
+    Mem/UseOdomGravity: "true"        # IMU gravity alignment
+
     # ── Sync ────────────────────────────────────────────────
     approx_sync: true
     approx_sync_max_interval: 0.5
     queue_size: 30
-    wait_imu_to_init: false
+    wait_imu_to_init: true            # Wait for Pixhawk IMU before processing
