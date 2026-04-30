@@ -270,8 +270,13 @@ class GlobalPlannerNode(Node):
             self._replan_cb, 10)
 
         # ── Publishers ──────────────────────────────────────
+        # A* produces the *initial* global plan on its own topic. D* Lite
+        # publishes the *live* path on /pegasus/path_planner/global_path
+        # (consumed by MPC), refining A*'s plan when local obstacles appear.
+        # Two separate topics so MPC sees one authoritative path; without
+        # this they oscillate when both publish concurrently.
         self.path_pub = self.create_publisher(
-            Path, '/pegasus/path_planner/global_path', 10)
+            Path, '/pegasus/path_planner/global_path_initial', 10)
 
         self.status_pub = self.create_publisher(
             String, '/pegasus/path_planner/status', 10)

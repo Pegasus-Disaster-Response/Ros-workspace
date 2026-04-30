@@ -18,11 +18,13 @@ px4_offboard_node:
                                        # stop sending trajectory commands.
                                        # PX4 will revert to HOLD mode.
 
-    # ── Auto-engage (for SITL testing only!) ─────────────
-    # WARNING: In real flight, NEVER set these to true.
-    # Use the manual arm/engage topics or QGroundControl instead.
-    auto_engage: false                # Auto-switch to offboard mode
-    auto_arm: false                   # Auto-arm the vehicle
+    # ── Auto-engage (launch-arg controlled, NOT set here) ─
+    # auto_engage and auto_arm are intentionally omitted from this
+    # YAML so they remain a launch-time decision. The node declares
+    # both with default=False (safe for real flight). For SITL,
+    # sitl_full.launch.py overrides them via launch args:
+    #   ros2 launch ... auto_arm:=true auto_engage:=true
+    # WARNING: In real flight, never pass these args.
 
     # ── Default altitude ─────────────────────────────────
     default_altitude_ned_m: -10.0     # NED (negative = up) — used if no setpoint

@@ -17,9 +17,8 @@ global_planner_node:
     heuristic_weight: 1.2             # slightly greedy for faster planning
     diagonal_movement: true            # 8-connected
     max_iterations: 100000             # increased for denser maps
-    cost_penalty_factor: 15.0          # INCREASED from 5.0 — pushes paths away from obstacles
-                                       # with dense obstacles, 5.0 was letting paths graze walls
-    lethal_cost_threshold: 90          # cells >= this value are impassable
+    cost_penalty_factor: 30.0          # was 15 — heavier penalty for inflation zone
+    lethal_cost_threshold: 60          # was 90 — refuse mid-inflation cells too
     unknown_cell_cost: 70              # more conservative in unknown areas
 
     # ── Goal Tolerance ───────────────────────────────────

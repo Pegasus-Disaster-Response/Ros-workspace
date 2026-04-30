@@ -23,15 +23,34 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def launch_camera_bridges(context):
-    """Build camera bridge nodes with resolved world/model names."""
+def launch_sensor_bridges(context):
+    """Build camera, lidar, and IMU bridge nodes with resolved world/model
+    names. Gazebo Harmonic publishes sensor data at
+    /world/<world>/model/<model>/link/<link>/sensor/<sensor>/<datatype>
+    when the SDF does not specify an explicit <topic>; we subscribe to those
+    fully-qualified paths and remap to the canonical Pegasus topics."""
     world = context.launch_configurations['gz_world']
     model = context.launch_configurations['gz_model']
-    prefix = f'/world/{world}/model/{model}/link/camera_link/sensor/camera'
 
-    image_topic = f'{prefix}/image'
-    info_topic = f'{prefix}/camera_info'
-    depth_topic = f'{prefix}/depth_image'
+    # Camera (RGB + depth share the same camera_link sensor block)
+    camera_prefix = f'/world/{world}/model/{model}/link/camera_link/sensor/camera'
+    image_topic = f'{camera_prefix}/image'
+    info_topic  = f'{camera_prefix}/camera_info'
+    depth_topic = f'{camera_prefix}/depth_image'
+
+    # The p110_v2 SDF sets <topic>velodyne_points/points</topic> on the
+    # lidar sensor, so the gz topic is flat (no world/model prefix).
+    # Confirmed via `gz topic -i -t /velodyne_points/points` — publisher
+    # type is gz.msgs.PointCloudPacked.
+    lidar_topic = '/velodyne_points/points'
+
+    # IMU has no <topic> override in the SDF, so it uses the
+    # Harmonic-default fully-qualified path. Confirmed via
+    # `gz topic -i -t /world/.../base_link/sensor/imu_sensor/imu`.
+    imu_topic = (
+        f'/world/{world}/model/{model}'
+        f'/link/base_link/sensor/imu_sensor/imu'
+    )
 
     camera_bridge = Node(
         package='ros_gz_bridge',
@@ -72,7 +91,34 @@ def launch_camera_bridges(context):
         output='screen',
     )
 
-    return [camera_bridge, camera_info_bridge, depth_bridge]
+    lidar_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='lidar_bridge',
+        arguments=[
+            f'{lidar_topic}@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked'
+        ],
+        remappings=[
+            (lidar_topic, '/velodyne_points'),
+        ],
+        output='screen',
+    )
+
+    imu_bridge = Node(
+        package='ros_gz_bridge',
+        executable='parameter_bridge',
+        name='imu_bridge',
+        arguments=[
+            f'{imu_topic}@sensor_msgs/msg/Imu[gz.msgs.IMU'
+        ],
+        remappings=[
+            (imu_topic, '/pegasus/imu/data'),
+        ],
+        output='screen',
+    )
+
+    return [camera_bridge, camera_info_bridge, depth_bridge,
+            lidar_bridge, imu_bridge]
 
 
 def generate_launch_description():
@@ -101,24 +147,12 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 2. VLP-16 LiDAR Bridge ────────────────────────────
-    #    LiDAR uses explicit <topic> in SDF, no world prefix.
-    #    Gazebo: /velodyne_points/points → ROS: /velodyne_points
-    lidar_bridge = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        name='lidar_bridge',
-        arguments=[
-            '/velodyne_points/points@sensor_msgs/msg/PointCloud2[gz.msgs.PointCloudPacked'
-        ],
-        remappings=[
-            ('/velodyne_points/points', '/velodyne_points'),
-        ],
-        output='screen',
-    )
-
-    # ── 3-5. Camera Bridges (image, info, depth) ─────────
-    camera_bridges = OpaqueFunction(function=launch_camera_bridges)
+    # ── 2-6. Camera + LiDAR + IMU Bridges ────────────────
+    #    All sensor bridges are built inside an OpaqueFunction so the
+    #    gz_world / gz_model substitutions can be resolved into the
+    #    fully-qualified Gazebo Harmonic topic paths
+    #    /world/<world>/model/<model>/link/<link>/sensor/<sensor>/<data>.
+    sensor_bridges = OpaqueFunction(function=launch_sensor_bridges)
 
     # ── 6. Odometry Bridge ────────────────────────────────
     #    Ground-truth odometry from Gazebo for initial testing.
@@ -133,20 +167,6 @@ def generate_launch_description():
         output='screen',
     )
 
-    # ── 7. IMU Bridge ─────────────────────────────────────
-    imu_bridge = Node(
-        package='ros_gz_bridge',
-        executable='parameter_bridge',
-        name='imu_bridge',
-        arguments=[
-            '/imu@sensor_msgs/msg/Imu[gz.msgs.IMU'
-        ],
-        remappings=[
-            ('/imu', '/pegasus/imu/data'),
-        ],
-        output='screen',
-    )
-
     # ── 8. Static TF Publishers ───────────────────────────
     tf_world_map = Node(
         package='tf2_ros',
@@ -156,33 +176,37 @@ def generate_launch_description():
         output='screen',
     )
 
-    tf_map_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='map_to_odom',
-        arguments=['0', '0', '0', '0', '0', '0', 'map', 'odom'],
-        output='screen',
-    )
+    # NOTE: map→odom is NOT published here. RTAB-Map publishes this
+    # dynamically as it localises. A static identity here would fight
+    # the SLAM output and pin the vehicle to the map origin.
+
+    # NOTE: base_link→velodyne is NOT published here. pegasus_slam.launch.py
+    # owns this TF with the correct pose from the P110 V2 SDF.
+    # Publishing it here would conflict and cause incorrect LiDAR projection.
 
     # NOTE: odom→base_link is NOT published here.
     # The odometry_selector_node in the SLAM launch owns that transform.
-    # Publishing it here would conflict and cause NaN TF errors.
 
-    # Velodyne: 0.15m above base_link (from vtol1 SDF)
-    tf_base_velodyne = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='base_link_to_velodyne',
-        arguments=['0', '0', '0.15', '0', '0', '0', 'base_link', 'velodyne'],
-        output='screen',
-    )
-
-    # Camera: at (0.12, 0.03, 0.242) from base_link (from vtol1 SDF include pose)
+    # Camera: at (-0.7, 0, 0) from base_link — CameraJoint pose in p110_v2/model.sdf.
+    # Publishes as 'camera_link' to match the Gazebo sensor link name so that the
+    # frame_id in bridged Image/CameraInfo messages is resolvable in the TF tree.
     tf_base_camera = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='base_link_to_camera_link',
-        arguments=['0.12', '0.03', '0.242', '0', '0', '0', 'base_link', 'camera_link'],
+        arguments=['-0.7', '0', '0', '0', '0', '0', 'base_link', 'camera_link'],
+        output='screen',
+    )
+
+    # Identity bridge: Gazebo images carry frame_id='camera_link'; RTAB-Map's
+    # URDF chain (real ZED wrapper) roots at 'zed_x_camera_link'. This zero-offset
+    # TF makes both names resolve to the same physical location so SLAM works
+    # in simulation without modifying the SLAM launch file.
+    tf_camera_to_zed = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_link_to_zed_x_camera_link',
+        arguments=['0', '0', '0', '0', '0', '0', 'camera_link', 'zed_x_camera_link'],
         output='screen',
     )
 
@@ -207,16 +231,13 @@ def generate_launch_description():
 
         # Bridges
         clock_bridge,
-        lidar_bridge,
-        camera_bridges,
+        sensor_bridges,
         odom_bridge,
-        imu_bridge,
 
         # TF tree
         tf_world_map,
-        tf_map_odom,
-        tf_base_velodyne,
         tf_base_camera,
+        tf_camera_to_zed,
 
         # Visualization
         rviz,

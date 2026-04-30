@@ -24,8 +24,9 @@ BATTERY_RETURN_THRESHOLD   = 0.20   # 20% → return to base
 BATTERY_EMERGENCY_THRESHOLD = 0.10  # 10% → emergency land
 
 WAYPOINT_ACCEPT_RADIUS = 3.0   # metres — advance to next waypoint within this distance
-SEARCH_ALTITUDE        = 25.0  # metres AGL for lawnmower pattern
-SEARCH_LANE_SPACING    = 10.0  # metres between lawnmower lanes
+SEARCH_ALTITUDE        = 10.0  # metres AGL for lawnmower pattern (was 25.0; lowered for SITL test loop)
+SEARCH_LANE_SPACING    = 5.0   # metres between lawnmower lanes (was 10.0; tightened for smaller test box)
+SEARCH_FALLBACK_SIZE   = 30.0  # metres — fallback box edge length when no SLAM grid yet (was 100.0)
 
 
 class MissionPlannerNode(Node):
@@ -73,7 +74,9 @@ class MissionPlannerNode(Node):
             self.sensor_callback, 10)
         self.create_subscription(BatteryStatus, '/fmu/out/battery_status',
             self.battery_callback, px4_qos)
-        self.create_subscription(VehicleStatus, '/fmu/out/vehicle_status',
+        # PX4 v1.15+ publishes the versioned _v1 topic. The unversioned
+        # /fmu/out/vehicle_status has 0 publishers in this PX4 build.
+        self.create_subscription(VehicleStatus, '/fmu/out/vehicle_status_v1',
             self.vehicle_status_callback, px4_qos)
         # External commands: START_SEARCH | RETURN_HOME | ABORT | RESET
         self.create_subscription(String, '/pegasus/autonomy/mission_command',
@@ -212,12 +215,17 @@ class MissionPlannerNode(Node):
         if self.mission_status == 'INITIALIZING':
             self._transition('READY')
 
-        if (self.auto_start_search and not self._auto_started
+        # Auto-start: re-evaluates every loop tick (no _auto_started latch
+        # so we retry if the first window misses). Uses the px4_msgs
+        # constant rather than the hardcoded 14, since PX4 v1.16+ may
+        # report OFFBOARD under a different value.
+        if (self.auto_start_search
                 and self.mission_status == 'READY'
                 and self.vehicle_armed
-                and self.nav_state == 14):  # NAV_STATE_OFFBOARD
-            self.get_logger().info('Auto-starting search pattern')
-            self._auto_started = True
+                and self.nav_state == VehicleStatus.NAVIGATION_STATE_OFFBOARD):
+            self.get_logger().info(
+                f'Auto-starting search pattern '
+                f'(armed={self.vehicle_armed}, nav_state={self.nav_state})')
             self._transition('SEARCH_PATTERN')
 
         elif self.mission_status == 'SEARCH_PATTERN':
@@ -299,10 +307,11 @@ class MissionPlannerNode(Node):
             width_m  = info.width  * info.resolution
             height_m = info.height * info.resolution
         elif self.current_pose is not None:
-            origin_x = self.current_pose.position.x - 50.0
-            origin_y = self.current_pose.position.y - 50.0
-            width_m  = 100.0
-            height_m = 100.0
+            half = SEARCH_FALLBACK_SIZE / 2.0
+            origin_x = self.current_pose.position.x - half
+            origin_y = self.current_pose.position.y - half
+            width_m  = SEARCH_FALLBACK_SIZE
+            height_m = SEARCH_FALLBACK_SIZE
         else:
             self.get_logger().warn('Cannot build search pattern — no pose or map')
             return
@@ -345,11 +354,14 @@ class MissionPlannerNode(Node):
         if self.current_pose:
             p = self.current_pose.position
             pos_str = f' | Pos: [{p.x:.1f}, {p.y:.1f}, {p.z:.1f}]'
+        nav = self.nav_state if self.nav_state is not None else '?'
         msg = String()
         msg.data = (
             f'State: {self.mission_status} | '
             f'SLAM: {"OK" if self.slam_initialized else "INIT"} | '
             f'PX4: {"OK" if self.px4_connected else "WAIT"} | '
+            f'arm: {"Y" if self.vehicle_armed else "N"} | '
+            f'nav: {nav} | '
             f'Batt: {self.battery_level*100:.0f}%'
             f'{pos_str}'
         )

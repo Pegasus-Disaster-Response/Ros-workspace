@@ -60,9 +60,17 @@ local_costmap_node:
       occupied_cost: 100
 
     # ── Inflation ──────────────────────────────────────
+    # radius_m: how far the inflation zone extends from each obstacle.
+    # cost_scaling_factor: how fast cost decays. With scaling=5, cost
+    # falls below 60 within 0.2 m of the obstacle, leaving most of the
+    # 5 m inflation in the planner's "low cost, traversable with
+    # penalty" range. Dropping to 1.0 keeps cost > 60 across the inner
+    # ~2.5 m of inflation, which (combined with the planner's lower
+    # lethal threshold) makes the planner actually treat this band
+    # as no-go.
     inflation:
-      radius_m: 3.0
-      cost_scaling_factor: 5.0
+      radius_m: 5.0
+      cost_scaling_factor: 1.0
 
     # ── Sensor Health / Degraded Modes ─────────────────
     degraded_modes:

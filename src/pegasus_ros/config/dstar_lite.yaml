@@ -15,9 +15,12 @@ dstar_lite_node:
                                        # 5–10 Hz is typical for UAV
 
     # ── Cost Parameters ──────────────────────────────────
-    lethal_cost_threshold: 90          # Cells >= this are impassable
-    cost_penalty_factor: 15.0          # Penalty for inflation-zone cells
-                                       # Match this to the A* planner value
+    # Lowered lethal threshold from 90 → 60 so the planner refuses
+    # mid-inflation cells, not just occupied ones. Bumped the penalty
+    # so the few low-cost inflation cells it does enter cost it more.
+    # Together these stop the planner from hugging walls.
+    lethal_cost_threshold: 60
+    cost_penalty_factor: 30.0          # Match this to the A* planner value
 
     # ── Path Simplification ──────────────────────────────
     path_simplification: true          # Reduce waypoint count via RDP
