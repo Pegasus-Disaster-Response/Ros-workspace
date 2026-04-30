@@ -1,6 +1,6 @@
 # Pegasus Disaster Response UAV — Autonomous Navigation System
 
-**Version:** 2.7.0
+**Version:** 2.8.0
 **Institution:** California Polytechnic State University, Pomona
 **Team:** Pegasus
 **Sponsor:** Lockheed Martin
@@ -16,20 +16,27 @@
 
 ---
 
-## Full Autonomy Pipeline (v2.7)
+## Full Autonomy Pipeline (v2.8)
 
 ```
-  Goal ──→ A* ──→ D* Lite 3D ──→ MPC ──→ PX4 Offboard ──→ Pixhawk ──→ Motors
-            │         │            │           │
-         grid_map  costmap_3d    /odom    XRCE-DDS
+  Goal ──→ A* (initial) ──→ D* Lite 3D (live) ──→ MPC ──→ PX4 Offboard ──→ Pixhawk ──→ Motors
+              │                  │                  │          │
+        global_path_initial   global_path        target_pose  XRCE-DDS
+                                  ↑                  +
+                                grid_map         twist (vz, yaw_rate)
 ```
+
+A* publishes the *initial* plan; D* Lite publishes the *live* plan that re-routes around obstacles
+seen in the local costmap. MPC consumes D*'s live path and emits a position lookahead pose plus a
+yaw-rate / vz twist. The PX4 offboard node carrot-follows the path waypoints (continuous projection,
+not chord-cutting) and sends NED `TrajectorySetpoint`s to PX4 at 50 Hz.
 
 | Layer | Node | Rate | Input | Output |
 |---|---|---|---|---|
-| Global plan | global_planner_node | on goal/replan | OccupancyGrid | /pegasus/path_planner/global_path |
-| Local replan | dstar_lite_node | 5 Hz | 3D voxel grid (Int8MultiArray) | /pegasus/path_planner/local_path |
-| Trajectory | mpc_trajectory_node | 50 Hz | /local_path + /odom | /pegasus/trajectory/setpoint |
-| Flight control | px4_offboard_node | 50 Hz | /trajectory/setpoint | /fmu/in/trajectory_setpoint |
+| Global plan | global_planner_node | on goal/replan | OccupancyGrid | /pegasus/path_planner/global_path_initial |
+| Local replan | dstar_lite_node | 5 Hz | 3D voxel grid (Int8MultiArray) | /pegasus/path_planner/global_path |
+| Trajectory | mpc_trajectory_node | 20 Hz | global_path + /odom | /pegasus/trajectory/setpoint (Twist) + /pegasus/trajectory/target_pose (Pose) |
+| Flight control | px4_offboard_node | 50 Hz | target_pose + global_path + vehicle_odometry | /fmu/in/trajectory_setpoint |
 
 ---
 
@@ -73,9 +80,10 @@ Ros-workspace/
     │   │   ├── planning_test_map.pgm + .yaml
     │   │   └── dense_disaster_map.pgm + .yaml
     │   ├── pegasus_autonomy/
-    │   │   ├── mission_planner_node.py            ← high-level mission logic
+    │   │   ├── mission_planner_node.py            ← high-level mission logic + lawnmower auto-start
     │   │   ├── px4_imu_bridge_node.py             ← PX4 SensorCombined → sensor_msgs/Imu
-    │   │   ├── px4_offboard_node.py               ← MPC → PX4 TrajectorySetpoint (ENU→NED)
+    │   │   ├── px4_offboard_node.py               ← MPC + path → PX4 TrajectorySetpoint (carrot-on-path, ENU→NED)
+    │   │   ├── px4_odom_bridge_node.py            ← PX4 vehicle_odometry → /odom_px4 (NED→ENU) for SITL
     │   │   ├── odometry_selector_node.py          ← fault-tolerant odom switching (NaN-safe)
     │   │   ├── lidar_costmap_layer_node.py        ← VLP-16 → obstacle points (RANSAC ground removal)
     │   │   ├── zed_depth_costmap_layer_node.py    ← ZED X depth → obstacle points
@@ -165,32 +173,81 @@ ros2 launch pegasus_ros pegasus_full.launch.py fcu_dev:=/dev/ttyUSB0
 rtabmap-databaseViewer ~/Ros-workspace/maps/pegasus_disaster_map.db
 ```
 
+```bash
+rtabmap-databaseViewer ~/Ros-workspace/maps/sitl_map.db
+```
+
 ### 7. Start Fresh (delete existing map)
 
 ```bash
-rm ~/Ros-workspace/maps/pegasus_disaster_map.db
-```
-
-### 8. SITL (Gazebo + PX4)
+rm ~/Ros-workspace/maps/pegasus_disaster_map.dbitl
 
 ```bash
-# Terminal 1: PX4 SITL + Gazebo
-cd ~/PX4-Autopilot && make px4_sitl gz_x500
-
-# Terminal 2: XRCE-DDS agent
-MicroXRCEAgent udp4 -p 8888
-
-# Terminal 3: Full stack
-cd ~/Ros-workspace && source install/setup.bash
-ros2 launch pegasus_ros sitl_full.launch.py
-
-# Terminal 4: Send goal + arm
-ros2 topic pub --once /pegasus/autonomy/target_waypoint \
-    geometry_msgs/PoseStamped \
-    "{header: {frame_id: 'map'}, pose: {position: {x: 10.0, y: 5.0, z: 10.0}}}"
-ros2 topic pub --once /pegasus/offboard/arm std_msgs/Bool "{data: true}"
-ros2 topic pub --once /pegasus/offboard/engage std_msgs/Bool "{data: true}"
+rm ~/Ros-workspace/maps/sitl_map.db
 ```
+### 8. SITL (Gazebo + PX4) — full autonomous lawnmower test
+
+`sitl_full.launch.py` brings up XRCE-DDS, PX4 SITL with Gazebo Harmonic, the sensor bridges, SLAM,
+the costmap pipeline (with the LiDAR obstacle layer wired in), A*+D*, MPC, the PX4 offboard node,
+and the mission planner. With `auto_arm:=true auto_engage:=true` the drone takes off and starts
+flying a lawnmower search pattern by itself — no manual goal, arm, or mode switch needed.
+
+```bash
+cd ~/Ros-workspace && source install/setup.bash
+ros2 launch pegasus_ros sitl_full.launch.py \
+    gz_world:=p110_world \
+    auto_arm:=true \
+    auto_engage:=true \
+    database_path:=$HOME/Ros-workspace/maps/sitl_map.db
+```
+
+**Boot sequence (~10–20 s of sim time on a Jetson):**
+
+1. PX4 SITL + Gazebo come up (Gazebo runs headless `-s`; open the GUI client with `gz sim -g`).
+2. XRCE-DDS bridge handshakes, sensor bridges (clock, lidar, IMU, camera, depth, odom) come online.
+3. SLAM starts after a 4 s timer. The mission planner reaches `READY` once the px4_odom_bridge produces `/odom_px4`.
+4. `px4_offboard_node` streams `OffboardControlMode` heartbeats at 50 Hz, then sends `ARM` and `DO_SET_MODE → OFFBOARD` and **retries every 0.3 s** until `/fmu/out/vehicle_status_v1` confirms.
+5. Mission planner sees `arming_state == 2 && nav_state == NAVIGATION_STATE_OFFBOARD` → transitions `READY → SEARCH_PATTERN` and begins publishing waypoints.
+6. A* publishes the initial path, D* refines and publishes the live path. MPC tracks. The drone climbs to `default_alt = 10 m` (altitude-priority before any lateral motion), then carrot-follows the lawnmower at ~3 m/s.
+
+**Monitoring during a run (run each in its own terminal):**
+
+```bash
+# State machine + altitude + nav state
+ros2 topic echo /pegasus/autonomy/mission_status
+
+# Offboard handshake (armed, offboard_engaged, has_setpoint, setpoint_age_s)
+ros2 topic echo /pegasus/offboard/status
+
+# Did D* find a path?
+ros2 topic hz /pegasus/path_planner/global_path
+
+# Final NED setpoint going to PX4
+ros2 topic echo /fmu/in/trajectory_setpoint --qos-reliability best_effort --once
+```
+
+**SITL launch arguments:**
+
+| Arg | Default | Purpose |
+|---|---|---|
+| `gz_world` | `p110_world` | Gazebo world (must match `PX4_GZ_WORLD`) |
+| `gz_model` | `p110_v2_0` | Gazebo model instance name |
+| `auto_arm` | `false` | Auto-send arm command (SITL only — NEVER true on hardware) |
+| `auto_engage` | `false` | Auto-switch PX4 to OFFBOARD mode (SITL only) |
+| `database_path` | `~/Ros-workspace/maps/pegasus_disaster_map.db` | RTAB-Map DB file. Use a separate file for SITL to avoid mixing with real-flight maps. |
+
+**SITL-specific things to know:**
+
+- **Odometry source**: SITL overrides `primary_odom_topic` to `/odom_px4` (published by `px4_odom_bridge_node`, which converts `/fmu/out/vehicle_odometry` from NED → ENU). LiDAR ICP drifts ~10 m on z with the reduced 360-sample lidar on Jetson, and the gz `OdometryPublisher` plugin isn't auto-attached to the `p110_v2` model, so PX4's own EKF is the only ground-truth-quality source.
+- **Reduced sensors**: the `p110_v2` LiDAR is 360 × 16 @ 5 Hz (was 1800 × 16 @ 10 Hz) and the camera is 640×480 @ 10 Hz (was 1920×1200 @ 30 Hz). These are SDF edits in `~/PX4-Simulation/Tools/simulation/gz/models/{p110_v2,better_cam}/model.sdf` — they raise Gazebo's real-time factor from ~0.05 to ~0.4 on a Jetson.
+- **Stopping cleanly**: `Ctrl+C` in the launch terminal. The `make`-wrapped subprocess sometimes leaves zombies; if `pgrep -af 'gz sim|px4|MicroXRCE'` shows leftovers, run `pkill -9 -f 'px4_sitl_default|gz sim|MicroXRCEAgent|make px4_sitl'`.
+
+**Database options (same as before):**
+
+- Default DB: `~/Ros-workspace/maps/pegasus_disaster_map.db`. SITL will read/write the same file as real-sensor runs unless you override.
+- Separate SITL DB: pass `database_path:=~/Ros-workspace/maps/sitl_map.db` (recommended).
+- Fresh map: `rm ~/Ros-workspace/maps/sitl_map.db`, or `ros2 service call /rtabmap/reset std_srvs/srv/Empty` mid-run.
+
 
 ### 9. A* Planner Test (no hardware)
 
@@ -313,26 +370,35 @@ The static TF from `base_link` targets `zed_x_camera_link` (the ZED URDF root fr
 | /pegasus/imu/data | Imu | 50 Hz | px4_imu_bridge |
 
 ### Odometry
-| Topic | Source | Priority |
+| Topic | Source | Used as |
 |---|---|---|
-| /odom_lidar | ICP LiDAR odometry | Primary |
-| /odom_vision | RGB-D visual odometry | Backup |
-| /odom | odometry_selector_node | Published (best available) |
+| /odom_lidar | ICP LiDAR odometry (`pegasus_slam.launch.py`) | Primary on hardware |
+| /odom_vision | RGB-D visual odometry | Backup (currently disabled) |
+| /odom_px4 | `px4_odom_bridge_node` (PX4 NED → ENU) | Primary in SITL |
+| /odom | `odometry_selector_node` | Final published `/odom` (selected source) |
+
+The `primary_odom_topic` is a launch arg on `pegasus_slam.launch.py` (default `/odom_lidar`). SITL
+overrides it to `/odom_px4`.
 
 ### Planning Pipeline
 | Topic | Type | Rate | Source |
 |---|---|---|---|
-| /pegasus/path_planner/global_path | Path | on replan | A* |
-| /pegasus/path_planner/local_path | Path | ~5 Hz | D* Lite 3D |
-| /pegasus/trajectory/setpoint | PoseStamped | 50 Hz | MPC |
-| /pegasus/trajectory/velocity_setpoint | TwistStamped | 50 Hz | MPC |
+| /pegasus/autonomy/target_waypoint | PoseStamped | 2 Hz | mission_planner_node |
+| /pegasus/path_planner/global_path_initial | Path | on replan | A* (`global_planner_node`) |
+| /pegasus/path_planner/global_path | Path | ~5 Hz | D* Lite (live, replans on costmap change) |
+| /pegasus/trajectory/setpoint | TwistStamped | 20 Hz | MPC (linear.x = body fwd, linear.z = vz, angular.z = yaw_rate) |
+| /pegasus/trajectory/target_pose | PoseStamped | 20 Hz | MPC (path lookahead point, ENU) |
+| /pegasus/autonomy/mission_status | String | 1 Hz | mission_planner_node (state + arm + nav + pos) |
 
 ### PX4 Offboard
-| Topic | Type | Rate |
-|---|---|---|
-| /fmu/in/trajectory_setpoint | TrajectorySetpoint | 50 Hz |
-| /fmu/in/offboard_control_mode | OffboardControlMode | 50 Hz |
-| /fmu/in/vehicle_command | VehicleCommand | on demand |
+| Topic | Type | Rate | Notes |
+|---|---|---|---|
+| /fmu/in/trajectory_setpoint | TrajectorySetpoint | 50 Hz | NED, position-mode (carrot-on-path) + velocity FF + yaw |
+| /fmu/in/offboard_control_mode | OffboardControlMode | 50 Hz | Heartbeat (PX4 drops OFFBOARD without it) |
+| /fmu/in/vehicle_command | VehicleCommand | retry 0.3 Hz | ARM (400) + DO_SET_MODE (176) — sent until vehicle_status_v1 confirms |
+| /fmu/out/vehicle_status_v1 | VehicleStatus | best-effort | Real arm/nav state (PX4 v1.15+ versioned topic) |
+| /fmu/out/vehicle_odometry | VehicleOdometry | best-effort | NED pose used by px4_odom_bridge + offboard yaw extraction |
+| /fmu/out/vehicle_command_ack | VehicleCommandAck | per command | PX4 response for arm/mode commands |
 
 ### Control
 | Topic | Type | Purpose |

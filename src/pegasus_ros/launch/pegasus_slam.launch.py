@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """
 Pegasus RTAB-Map SLAM Launch File
-Multi-sensor SLAM: ZED X (RGB-D) + VLP-16 LiDAR + Pixhawk IMU
+LiDAR-only SLAM: VLP-16 + Pixhawk IMU. ZED X kept running in the
+sensors launch for visualization only — not consumed by SLAM.
 
-v2.3 changes:
-  - Fix #3: ICP and RGB-D odometry nodes now load their own dedicated
-    YAML configs (icp_odometry.yaml, rgbd_odometry.yaml) so subscription
-    params (subscribe_scan_cloud, subscribe_rgb, etc.) are under the
-    correct node name and actually take effect. Previously both loaded
-    rtabmap.yaml whose params are keyed under 'rtabmap:' — a namespace
-    that doesn't match either odometry node name.
+v3.0 changes (LiDAR-only):
+  - rgbd_odometry node removed. Only icp_odometry feeds the selector.
+  - rgb/depth remappings stripped from rtabmap mapping/localization
+    nodes. rtabmap_viz keeps them so the GUI can still show ZED feed
+    alongside the LiDAR map.
+  - Loop closure switches to ICP-based geometric proximity
+    (RGBD/ProximityBySpace=true, Reg/Strategy=1) — see rtabmap.yaml.
+  - IMU still feeds gravity into icp_odometry and into the rtabmap
+    pose graph (Optimizer/GravitySigma).
 
 v2.6.1 changes:
   - Fix: Static TF for ZED X now publishes to 'zed_x_camera_center'
@@ -76,23 +79,28 @@ def generate_launch_description():
         description='Path to RTAB-Map database (persistent across builds)'
     )
 
-    enable_zed_arg = DeclareLaunchArgument(
-        'enable_zed',
-        default_value='true',
-        description='Enable ZED X RGB-D odometry'
-    )
-
     rviz_arg = DeclareLaunchArgument(
         'rviz',
         default_value='true',
         description='Launch RViz'
     )
 
+    # Allow SITL to override the primary odometry source. ICP on a
+    # sparse 360-sample lidar drifts ~10 m on z; Gazebo's ground-truth
+    # odometry (/model/p110_v2_0/odometry_with_covariance) is exact and
+    # makes /odom usable for visualisation and the autonomy fallback.
+    primary_odom_arg = DeclareLaunchArgument(
+        'primary_odom_topic',
+        default_value='/odom_lidar',
+        description='Primary odometry topic for the selector (override to '
+                    'Gazebo ground truth in SITL).'
+    )
+
     localization = LaunchConfiguration('localization')
     database_path = LaunchConfiguration('database_path')
     rviz = LaunchConfiguration('rviz')
     use_sim_time = LaunchConfiguration('use_sim_time')
-    enable_zed = LaunchConfiguration('enable_zed')
+    primary_odom_topic = LaunchConfiguration('primary_odom_topic')
 
     # ── Config file paths ────────────────────────────────────
     # Fix #3: Each node type gets its own config with params under
@@ -102,9 +110,6 @@ def generate_launch_description():
     ])
     icp_odom_config = PathJoinSubstitution([
         pegasus_share, 'config', 'icp_odometry.yaml'
-    ])
-    rgbd_odom_config = PathJoinSubstitution([
-        pegasus_share, 'config', 'rgbd_odometry.yaml'
     ])
 
     # ── Topic Names ──────────────────────────────────────────
@@ -147,34 +152,9 @@ def generate_launch_description():
     )
 
     # ══════════════════════════════════════════════════════════
-    # 2. RGB-D Visual Odometry (backup odometry source)
-    # ══════════════════════════════════════════════════════════
-    rgbd_odometry = Node(
-        package='rtabmap_odom',
-        executable='rgbd_odometry',
-        name='rgbd_odometry',
-        output='screen',
-        parameters=[
-            rgbd_odom_config,           # Fix #3: dedicated config
-            {
-                'frame_id': frame_id,
-                'odom_frame_id': 'odom_vision',
-                'publish_tf': False,    # Selector node handles TF
-                'use_sim_time': use_sim_time,
-            },
-        ],
-        remappings=[
-            ('rgb/image', rgb_image_topic),
-            ('rgb/camera_info', rgb_camera_info_topic),
-            ('depth/image', depth_image_topic),
-            ('odom', '/odom_vision'),
-            ('imu', imu_topic),
-        ],
-        condition=IfCondition(enable_zed),
-    )
-
-    # ══════════════════════════════════════════════════════════
-    # 3. Odometry Fusion/Selector (fault-tolerant switching)
+    # 2. Odometry Fusion/Selector (fault-tolerant switching)
+    #    Backup vision odom is disabled in lidar-only mode; the
+    #    selector still gates NaN and publishes /odom + TF.
     # ══════════════════════════════════════════════════════════
     odometry_selector = Node(
         package='pegasus_ros',
@@ -182,7 +162,7 @@ def generate_launch_description():
         name='odometry_selector',
         output='screen',
         parameters=[{
-            'primary_odom_topic': '/odom_lidar',
+            'primary_odom_topic': primary_odom_topic,
             'backup_odom_topic': '/odom_vision',
             'timeout_threshold': 0.5,
             'use_sim_time': use_sim_time,
@@ -217,14 +197,10 @@ def generate_launch_description():
             },
         ],
         remappings=[
-            ('odom', '/odom'),              # FIX: namespace='rtabmap' would make this
-            #                               # /rtabmap/odom without the explicit remap,
-            #                               # but odometry_selector publishes to /odom.
-            ('rgb/image', rgb_image_topic),
-            ('rgb/camera_info', rgb_camera_info_topic),
-            ('depth/image', depth_image_topic),
+            ('odom', '/odom'),              # odometry_selector publishes to /odom;
+                                            # namespace='rtabmap' would otherwise
+                                            # rewrite this to /rtabmap/odom.
             ('scan_cloud', scan_cloud_topic),
-            ('imu', imu_topic),
         ],
         # NO arguments=['--delete_db_on_start'] here
         namespace='rtabmap',
@@ -253,12 +229,8 @@ def generate_launch_description():
             },
         ],
         remappings=[
-            ('odom', '/odom'),              # FIX: same namespace issue as mapping node
-            ('rgb/image', rgb_image_topic),
-            ('rgb/camera_info', rgb_camera_info_topic),
-            ('depth/image', depth_image_topic),
+            ('odom', '/odom'),
             ('scan_cloud', scan_cloud_topic),
-            ('imu', imu_topic),
         ],
         # NO arguments=['--delete_db_on_start'] here either
         namespace='rtabmap',
@@ -273,6 +245,9 @@ def generate_launch_description():
         executable='rtabmap_viz',
         name='rtabmap_viz',
         output='screen',
+        namespace='rtabmap',           # Must match rtabmap node namespace so the
+                                       # viz subscribes to /rtabmap/info and
+                                       # /rtabmap/mapData, not /info and /mapData.
         parameters=[rtabmap_config],
         remappings=[
             ('rgb/image', rgb_image_topic),
@@ -312,28 +287,22 @@ def generate_launch_description():
         executable='static_transform_publisher',
         name='tf_base_to_velodyne',
         arguments=[
-            '0.0', '0.0', '0.25',
+            '0.0', '0.0', '0.432',
             '0', '0', '0',
             'base_link', 'velodyne'
         ],
     )
 
-    # FIX v2.7: Target frame changed from 'zed_x_camera_center' to
-    # 'zed_x_camera_link'. The ZED v5.2 wrapper's robot_state_publisher
-    # publishes its URDF chain starting from zed_x_camera_link:
+    # Target frame is zed_x_camera_link (URDF root published by ZED wrapper's
+    # robot_state_publisher). Connects base_link to the full ZED TF chain:
     #   zed_x_camera_link -> zed_x_camera_center -> zed_x_left_camera_frame
     #                     -> zed_x_left_camera_frame_optical (etc.)
-    # Previously we published base_link -> zed_x_camera_center, which
-    # created two disconnected TF trees (the URDF root was orphaned).
-    # Now we connect to the URDF root so the entire chain is reachable.
-    # Z offset adjusted: camera_center is at Z+0.016 above camera_link,
-    # so camera_link Z = 0.10 - 0.016 = 0.084.
     tf_base_to_zed_x = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='tf_base_to_zed_x',
         arguments=[
-            '0.46', '0.0', '0.084',
+            '0.470', '0.0', '0.051',
             '0', '0', '0',
             'base_link', 'zed_x_camera_link'  # URDF root frame from ZED wrapper
         ],
@@ -376,8 +345,8 @@ def generate_launch_description():
         use_sim_time_arg,
         localization_arg,
         database_path_arg,
-        enable_zed_arg,
         rviz_arg,
+        primary_odom_arg,
 
         # Global parameter (after all args are declared)
         SetParameter(name='use_sim_time', value=use_sim_time),
@@ -387,9 +356,8 @@ def generate_launch_description():
         tf_base_to_zed_x,
         tf_base_to_imu,
 
-        # Odometry (dual sources with fusion)
+        # Odometry (LiDAR-only — IMU still feeds gravity into ICP)
         icp_odometry,
-        rgbd_odometry,
         odometry_selector,
 
         # SLAM

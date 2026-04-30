@@ -29,8 +29,6 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPo
 from sensor_msgs.msg import Imu
 from px4_msgs.msg import SensorCombined, VehicleAttitude
 
-import math
-
 
 class PX4ImuBridgeNode(Node):
     """
@@ -61,6 +59,8 @@ class PX4ImuBridgeNode(Node):
         self._latest_gyro = None
         self._latest_orientation = None
         self._msg_count = 0
+        self._start_time = self.get_clock().now()
+        self._warned_no_data = False
 
         # Subscribers
         self.sensor_sub = self.create_subscription(
@@ -88,9 +88,27 @@ class PX4ImuBridgeNode(Node):
         timer_period = 1.0 / publish_rate
         self.publish_timer = self.create_timer(timer_period, self._publish_imu)
 
+        # Watchdog: fires once after 5 s if no sensor_combined data arrives
+        self.watchdog_timer = self.create_timer(5.0, self._watchdog)
+
         self.get_logger().info(
             f'PX4 IMU Bridge started — publishing on /pegasus/imu/data '
             f'at {publish_rate} Hz (frame: {self.imu_frame_id})'
+        )
+
+    def _watchdog(self):
+        """Fire once after 5 s. Warn if no sensor_combined data has arrived."""
+        self.watchdog_timer.cancel()
+        if self._latest_accel is not None:
+            return
+        self.get_logger().error(
+            'No data on /fmu/out/sensor_combined after 5 s. '
+            'Publisher count is 0 — the Pixhawk uxrce_dds_client is not '
+            'creating datawriters for sensor topics.\n'
+            'Fix: from the Pixhawk MAVLink shell run:\n'
+            '  uxrce_dds_client stop\n'
+            '  uxrce_dds_client start -t serial -d /dev/ttyS1 -b 921600\n'
+            'Or verify PX4 param XRCE_DDS_0_CFG is set to the correct serial port.'
         )
 
     def _sensor_combined_callback(self, msg: SensorCombined):

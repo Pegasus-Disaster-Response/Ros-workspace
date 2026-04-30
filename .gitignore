@@ -13,6 +13,11 @@ __pycache__/
 # RTAB-Map databases
 *.db
 
+# Exported point clouds from rtabmap-export (multi-100-MB files, not source).
+# Some exceed GitHub's 100 MB per-file hard limit and would block the push.
+maps/*.ply
+maps/*.dot
+
 # OS
 .DS_Store
 Thumbs.db

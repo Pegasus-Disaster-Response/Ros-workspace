@@ -36,14 +36,15 @@ class MPCTrackerNode(Node):
         # 10 points ≈ 50 m lookahead, giving ~2.8 s foresight at cruise.
         self.declare_parameter('lookahead_points', 10)
 
-        # [PDR] Hard lower bound = stall speed: 26.84 mph = 12.0 m/s (FW mode).
-        # Do NOT reduce below this in fixed-wing flight — stall boundary.
-        self.declare_parameter('min_speed_m_s', 12.0)
+        # [PDR] FW stall speed = 12.0 m/s (must keep for fixed-wing flight).
+        # SITL test uses the VTOL in multicopter mode where hover (0 m/s) is fine,
+        # so we drop the floor here. Restore to 12.0 for fixed-wing missions.
+        self.declare_parameter('min_speed_m_s', 0.0)
 
-        # [PDR] Nominal cruise: 40.27 mph = 18.01 m/s. Used as the conservative
-        # MPC operating ceiling. Absolute max from PDR is 119.23 mph = 53.31 m/s —
-        # expand only after flight-test envelope clearance.
-        self.declare_parameter('max_speed_m_s', 18.01)
+        # [PDR] Nominal cruise 18.01 m/s. Capped at 6.0 for SITL test on the
+        # 30x30 m search box — gives readable on-screen motion at full RTF
+        # and avoids overshooting waypoints by a full lane width per tick.
+        self.declare_parameter('max_speed_m_s', 6.0)
 
         # [EST] FW yaw rate is bank-angle limited, not motor limited.
         # At cruise (18 m/s) with 35° bank: R = v²/(g·tan35°) ≈ 47 m → ω = v/R ≈ 0.38 rad/s.
@@ -56,7 +57,11 @@ class MPCTrackerNode(Node):
 
         # [EST] At 12 m/s near-target (stall-limited), 15 m gives ~1.25 s to confirm arrival.
         # Tighten after testing GPS/odom accuracy at low altitude.
-        self.declare_parameter('arrival_tolerance_m', 15.0)
+        # SITL test value: 3 m. Original 15 m makes the drone stop almost immediately
+        # in the small 30x30 m lawnmower box (half the path is within 15 m of every
+        # waypoint). Keep at 3 m here for the test loop; raise back to 15 m for
+        # real fixed-wing flight where stopping precisely at a corner doesn't matter.
+        self.declare_parameter('arrival_tolerance_m', 3.0)
 
         # [EST] At 18 m/s cruise, path divergence of 50 m is reachable in ~2.8 s.
         # If the vehicle strays farther than this, do a full nearest-point search.
@@ -69,10 +74,9 @@ class MPCTrackerNode(Node):
         # requires ~12 m. 60 m gives comfortable margin and smooth speed ramp.
         self.declare_parameter('near_target_slowdown_distance_m', 60.0)
 
-        # [PDR] Cannot fly slower than stall speed (12.0 m/s) in FW mode.
-        # If transitioning to MC hover, this must be managed separately in the
-        # transition controller — do not reduce this value for FW-only operation.
-        self.declare_parameter('min_speed_near_target_m_s', 12.0)
+        # [PDR] FW stall floor = 12.0 m/s (don't reduce in fixed-wing flight).
+        # SITL test value 0.0 lets the multicopter slow to a stop near a waypoint.
+        self.declare_parameter('min_speed_near_target_m_s', 0.0)
 
         self.path_topic = self.get_parameter('path_topic').value
         self.odom_topic = self.get_parameter('odom_topic').value
@@ -104,6 +108,13 @@ class MPCTrackerNode(Node):
         self.status_pub = self.create_publisher(String, self.status_topic, 10)
         self.target_marker_pub = self.create_publisher(Marker, '/mpc_sim/viz/target', 10)
         self.lookahead_path_pub = self.create_publisher(Path, '/mpc_sim/viz/lookahead_path', 10)
+        # Publish the lookahead target as a PoseStamped (ENU/map frame).
+        # The downstream PX4 offboard node uses this as a position setpoint
+        # — MPC's unicycle Twist alone leaves a multicopter rotating in
+        # place when it needs to move sideways to a target.
+        from geometry_msgs.msg import PoseStamped as _PS
+        self.target_pose_pub = self.create_publisher(
+            _PS, '/pegasus/trajectory/target_pose', 10)
 
         self.create_timer(1.0 / max(1.0, self.control_rate_hz), self._control_tick)
 
@@ -265,6 +276,7 @@ class MPCTrackerNode(Node):
 
         speed_cmd, yaw_rate_cmd, vz_cmd = best
         self._publish_command(speed_cmd, yaw_rate_cmd, vz_cmd)
+        self._publish_target_pose(target)
         self._publish_viz(target, nearest_idx, target_idx)
         self._publish_status({
             'mpc_active': True,
@@ -278,6 +290,17 @@ class MPCTrackerNode(Node):
             'objective': round(best_cost, 3),
         })
 
+
+    def _publish_target_pose(self, target: Tuple[float, float, float]) -> None:
+        from geometry_msgs.msg import PoseStamped
+        msg = PoseStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'map'
+        msg.pose.position.x = float(target[0])
+        msg.pose.position.y = float(target[1])
+        msg.pose.position.z = float(target[2])
+        msg.pose.orientation.w = 1.0
+        self.target_pose_pub.publish(msg)
 
     def _publish_viz(
         self,

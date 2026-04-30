@@ -132,8 +132,6 @@ def generate_launch_description():
             'publish_imu_tf': 'false',
             'publish_urdf': 'true',
 
-            'pos_tracking_enabled': 'false',
-
             'ros_params_override_path': PathJoinSubstitution([
                 pegasus_share, 'config', 'zed_x.yaml'
             ]),
@@ -199,10 +197,16 @@ def generate_launch_description():
 
     xrce_agent = ExecuteProcess(
         cmd=[
-            'micro-xrce-dds-agent', 'serial',
-            '--dev', fcu_dev,
+            '/snap/micro-xrce-dds-agent/current/usr/bin/MicroXRCEAgent', 'serial',
+            '-D', fcu_dev,
             '-b', fcu_baud,
         ],
+        additional_env={
+            'LD_LIBRARY_PATH': (
+                '/snap/micro-xrce-dds-agent/current/usr/lib/aarch64-linux-gnu'
+                ':/snap/micro-xrce-dds-agent/current/usr/lib'
+            )
+        },
         output='screen',
         condition=IfCondition(enable_xrce),
     )

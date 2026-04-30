@@ -34,8 +34,8 @@
         general:
             serial_number: 40709032           # Verify with ZED_Explorer
             grab_resolution: 'HD1080'         # HD1200 is native but HD1080 saves bandwidth
-            grab_frame_rate: 15               # 15 Hz sufficient for SLAM, reduces USB/GMSL load
-            pub_frame_rate: 15.0              # Match grab rate
+            grab_frame_rate: 30               # 30 Hz — at 18 m/s cruise, 15 Hz gave 1.2m/frame (marginal); 30 Hz halves to 0.6m/frame
+            pub_frame_rate: 30.0              # Match grab rate
             pub_resolution: 'CUSTOM'          # Use downscale factor below
             pub_downscale_factor: 2.0         # Publish at 540p (half of 1080p)
 

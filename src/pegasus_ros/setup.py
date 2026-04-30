@@ -11,7 +11,7 @@ setup(
     # finds the pegasus_autonomy module inside the pegasus_ros source tree.
     # Previously used: packages=[package_name.replace('pegasus_ros', 'pegasus_autonomy')]
     # which is fragile and omits the package_dir hint.
-    packages=['pegasus_autonomy'],
+    packages=['pegasus_autonomy', 'test'],
     #package_dir={'pegasus_autonomy': 'pegasus_autonomy'},
     data_files=[
         # ── Package index (required by ament) ──
@@ -22,8 +22,7 @@ setup(
         # ── Config files ──
         (os.path.join('share', package_name, 'config'), [
             'config/rtabmap.yaml',
-            'config/icp_odometry.yaml',             # NEW (Fix #3)
-            'config/rgbd_odometry.yaml',            # NEW (Fix #3)
+            'config/icp_odometry.yaml',
             'config/vlp16.yaml',
             'config/zed_x.yaml',
             'config/rviz_slam.rviz',
@@ -71,6 +70,7 @@ setup(
             'mission_planner_node = pegasus_autonomy.mission_planner_node:main',
             'px4_imu_bridge_node = pegasus_autonomy.px4_imu_bridge_node:main',
             'px4_offboard_node = pegasus_autonomy.px4_offboard_node:main',
+            'px4_odom_bridge_node = pegasus_autonomy.px4_odom_bridge_node:main',
             'odometry_selector_node = pegasus_autonomy.odometry_selector_node:main',
 
             # ── 3D Local costmap nodes ──
@@ -86,6 +86,11 @@ setup(
             # ── SIL test utility nodes ──
             'static_map_publisher_node = pegasus_autonomy.static_map_publisher_node:main',
             'static_odom_publisher_node = pegasus_autonomy.static_odom_publisher_node:main',
+
+            # ── Hardware sensor unit tests ──
+            'test_imu = test.test_imu:run',
+            'test_velodyne = test.test_velodyne:run',
+            'test_zed_x = test.test_zed_x:run',
 
             # ── MPC RViz test harness ──
             'mpc_sim_path_publisher = pegasus_autonomy.mpc_sim_path_publisher:main',
