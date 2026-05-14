@@ -174,13 +174,18 @@ rtabmap-databaseViewer ~/Ros-workspace/maps/pegasus_disaster_map.db
 ```
 
 ```bash
+CloudCompare ~/Ros-workspace/maps/pegasus_disaster_map_2026-04-30.ply
+
+```
+
+```bash
 rtabmap-databaseViewer ~/Ros-workspace/maps/sitl_map.db
 ```
 
 ### 7. Start Fresh (delete existing map)
 
 ```bash
-rm ~/Ros-workspace/maps/pegasus_disaster_map.dbitl
+rm ~/Ros-workspace/maps/pegasus_disaster_map.db
 
 ```bash
 rm ~/Ros-workspace/maps/sitl_map.db
